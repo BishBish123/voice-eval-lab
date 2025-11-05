@@ -45,3 +45,65 @@ class PipelineSpan(BaseModel):
     started_at_ms: int
     ended_at_ms: int
     attrs: dict[str, str] = Field(default_factory=dict)
+
+
+class TurnRun(BaseModel):
+    """Pipeline output for one user turn — all the spans + the final agent reply."""
+
+    user_turn_index: int
+    transcribed_text: str
+    agent_reply: str
+    interrupted: bool = False
+    false_trigger: bool = Field(
+        default=False,
+        description="True if the pipeline started replying to a non-utterance (cough, room noise).",
+    )
+    spans: list[PipelineSpan] = Field(default_factory=list)
+
+
+class ConversationRun(BaseModel):
+    """Per-conversation pipeline output the eval harness scores against."""
+
+    conv_id: str
+    topic: str
+    user_turns_played: int
+    turn_runs: list[TurnRun]
+
+
+# ---------------------------------------------------------------------------
+# Eval result types
+# ---------------------------------------------------------------------------
+
+
+class TurnLatencyStats(BaseModel):
+    p50_ms: float
+    p95_ms: float
+    p99_ms: float
+    n: int
+
+
+class ConversationScore(BaseModel):
+    conv_id: str
+    topic: str
+
+    turn_latency: TurnLatencyStats
+    transcription_wer: float = Field(description="Word-error rate, 0..1, lower is better")
+    response_faithfulness: float = Field(
+        description="Fraction of agent replies grounded in gold_facts."
+    )
+    barge_in_success_rate: float = Field(
+        description="Of user-interrupted turns, fraction the agent yielded within 200ms."
+    )
+    false_trigger_rate: float = Field(
+        description="Fraction of agent replies started while the user was not speaking."
+    )
+
+
+class EvalReport(BaseModel):
+    n_conversations: int
+    aggregate_turn_latency: TurnLatencyStats
+    aggregate_wer: float
+    aggregate_faithfulness: float
+    aggregate_barge_in_success: float
+    aggregate_false_trigger_rate: float
+    per_conversation: list[ConversationScore]
