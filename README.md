@@ -42,8 +42,9 @@ What's here:
     gold facts
   - **Barge-in success rate** — fraction of user-interrupted turns
     the pipeline yielded inside `barge_in_yield_ms`
-  - **False-trigger rate** — fraction of turns where the agent
-    replied to a non-utterance
+  - **False-trigger rate** — synthetic false-trigger turns per
+    user-turn opportunity (denominator is the user-turn count, not
+    `len(turn_runs)`)
   - **Barge-in yield p95** — distribution inside the budget
   - **TTS first-byte jitter** — std-dev of first-byte across turns
   - **Endpointing accuracy** — VAD-end alignment with the gold
