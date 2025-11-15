@@ -63,6 +63,38 @@ class MockSTT:
         return text, spans
 
 
+@dataclass
+class MockLLM:
+    """Returns a reply that mentions the first matching gold fact when present."""
+
+    latency_ms: int = 120
+
+    async def reply(
+        self,
+        history: list[Turn],
+        last_user_text: str,
+        gold_facts: list[str],
+    ) -> tuple[str, list[PipelineSpan]]:
+        match = next(
+            (
+                f
+                for f in gold_facts
+                if any(w in last_user_text.lower() for w in f.lower().split()[:3])
+            ),
+            None,
+        )
+        text = match if match else f"I don't have a confident answer about {last_user_text!r}."
+        spans = [
+            PipelineSpan(
+                name="llm.reply",
+                started_at_ms=0,
+                ended_at_ms=self.latency_ms,
+                attrs={"model": "mock", "history_len": str(len(history))},
+            )
+        ]
+        return text, spans
+
+
 def _inject_wer(text: str, sub_rate: float) -> str:
     """Substitute `sub_rate` fraction of words with a fixed token to drive WER."""
     if sub_rate <= 0:
