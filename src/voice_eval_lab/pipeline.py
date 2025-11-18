@@ -95,6 +95,22 @@ class MockLLM:
         return text, spans
 
 
+@dataclass
+class MockTTS:
+    first_byte_ms: int = 75
+
+    async def synthesize(self, text: str) -> tuple[int, list[PipelineSpan]]:
+        spans = [
+            PipelineSpan(
+                name="tts.synthesize",
+                started_at_ms=0,
+                ended_at_ms=self.first_byte_ms,
+                attrs={"engine": "mock", "chars": str(len(text))},
+            )
+        ]
+        return self.first_byte_ms, spans
+
+
 def _inject_wer(text: str, sub_rate: float) -> str:
     """Substitute `sub_rate` fraction of words with a fixed token to drive WER."""
     if sub_rate <= 0:
