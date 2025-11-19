@@ -187,8 +187,8 @@ uv run voice-eval compare --baseline evals/baseline.json
 
 # Override per-metric regression tolerances via a JSON config. All 9
 # keys are optional; any key omitted falls back to the matching
-# --latency-p95-ms / --wer / --faithfulness CLI flag (or the library
-# default for the other six metrics).
+# --latency-threshold-ms / --wer-threshold / --faithfulness-threshold
+# CLI flag (or the library default for the other six metrics).
 uv run voice-eval compare --baseline evals/baseline.json \
     --thresholds-config evals/thresholds.json
 
