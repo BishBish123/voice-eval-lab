@@ -13,10 +13,18 @@ behind the same Protocol surface.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Protocol
 
-from voice_eval_lab.models import PipelineSpan, Turn
+from voice_eval_lab.models import (
+    Conversation,
+    ConversationRun,
+    PipelineSpan,
+    Turn,
+    TurnRole,
+    TurnRun,
+)
 
 
 class STT(Protocol):
@@ -109,6 +117,91 @@ class MockTTS:
             )
         ]
         return self.first_byte_ms, spans
+
+
+# ---------------------------------------------------------------------------
+# Pipeline runner
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class VoicePipeline:
+    stt: STT
+    llm: LLM
+    tts: TTS
+    barge_in_yield_ms: int = 100
+    false_trigger_rate: float = 0.0
+
+    async def run(self, conversation: Conversation) -> ConversationRun:
+        history: list[Turn] = []
+        runs: list[TurnRun] = []
+        played = 0
+        for i, user_turn in enumerate(_user_turns(conversation.turns)):
+            played += 1
+            stt_text, stt_spans = await self.stt.transcribe(user_turn)
+            llm_text, llm_spans = await self.llm.reply(history, stt_text, conversation.gold_facts)
+            tts_first_byte, tts_spans = await self.tts.synthesize(llm_text)
+
+            spans = [
+                PipelineSpan(
+                    name="vad_end",
+                    started_at_ms=user_turn.ended_at_ms,
+                    ended_at_ms=user_turn.ended_at_ms,
+                    attrs={"role": "user"},
+                ),
+                *stt_spans,
+                *llm_spans,
+                *tts_spans,
+                PipelineSpan(
+                    name="tts_first_byte",
+                    started_at_ms=user_turn.ended_at_ms
+                    + sum(s.ended_at_ms - s.started_at_ms for s in stt_spans + llm_spans),
+                    ended_at_ms=user_turn.ended_at_ms
+                    + sum(s.ended_at_ms - s.started_at_ms for s in stt_spans + llm_spans)
+                    + tts_first_byte,
+                    attrs={},
+                ),
+            ]
+
+            interrupted = user_turn.interrupted
+            runs.append(
+                TurnRun(
+                    user_turn_index=i,
+                    transcribed_text=stt_text,
+                    agent_reply=llm_text,
+                    interrupted=interrupted,
+                    false_trigger=False,  # mock pipeline doesn't generate false triggers
+                    spans=spans,
+                )
+            )
+            history.append(user_turn)
+
+        # Optionally inject false triggers (one synthetic at the end) for
+        # eval-harness exercise.
+        if self.false_trigger_rate > 0 and runs:
+            runs.append(
+                TurnRun(
+                    user_turn_index=len(runs),
+                    transcribed_text="",
+                    agent_reply="...?",
+                    interrupted=False,
+                    false_trigger=True,
+                    spans=[],
+                )
+            )
+
+        return ConversationRun(
+            conv_id=conversation.conv_id,
+            topic=conversation.topic,
+            user_turns_played=played,
+            turn_runs=runs,
+        )
+
+
+def _user_turns(turns: Iterable[Turn]) -> Iterable[Turn]:
+    for t in turns:
+        if t.role is TurnRole.USER:
+            yield t
 
 
 def _inject_wer(text: str, sub_rate: float) -> str:
