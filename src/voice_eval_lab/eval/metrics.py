@@ -6,9 +6,14 @@ not call Python's builtin code-evaluator anywhere.)
 
 from __future__ import annotations
 
+import jiwer
+
 from voice_eval_lab.models import (
+    Conversation,
+    ConversationRun,
     PipelineSpan,
     TurnLatencyStats,
+    TurnRole,
     TurnRun,
 )
 
@@ -23,6 +28,19 @@ def turn_latency_stats(turn_runs: list[TurnRun]) -> TurnLatencyStats:
             continue
         samples.append(float(first_byte.ended_at_ms - vad.ended_at_ms))
     return _percentile_stats(samples)
+
+
+def transcription_wer(conversation: Conversation, run: ConversationRun) -> float:
+    user_turns = [t for t in conversation.turns if t.role is TurnRole.USER]
+    references: list[str] = []
+    hypotheses: list[str] = []
+    for ut, tr in zip(user_turns, run.turn_runs, strict=False):
+        references.append(ut.text)
+        hypotheses.append(tr.transcribed_text)
+    if not references:
+        return 0.0
+    out = jiwer.wer(references, hypotheses)
+    return float(out)
 
 
 def _find_span(spans: list[PipelineSpan], name: str) -> PipelineSpan | None:
