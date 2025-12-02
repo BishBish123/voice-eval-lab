@@ -43,6 +43,24 @@ def transcription_wer(conversation: Conversation, run: ConversationRun) -> float
     return float(out)
 
 
+def response_faithfulness(conversation: Conversation, run: ConversationRun) -> float:
+    """Fraction of agent replies that quote at least one gold fact substring.
+
+    Proxy until an LLM judge is plugged in via the same Protocol.
+    """
+    if not conversation.gold_facts:
+        return 1.0  # nothing to disagree with
+    score = 0.0
+    n = 0
+    for tr in run.turn_runs:
+        if tr.false_trigger:
+            continue
+        n += 1
+        if any(fact.lower() in tr.agent_reply.lower() for fact in conversation.gold_facts):
+            score += 1.0
+    return score / n if n else 0.0
+
+
 def _find_span(spans: list[PipelineSpan], name: str) -> PipelineSpan | None:
     for s in spans:
         if s.name == name:
