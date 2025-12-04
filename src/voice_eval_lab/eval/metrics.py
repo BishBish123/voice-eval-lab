@@ -61,6 +61,23 @@ def response_faithfulness(conversation: Conversation, run: ConversationRun) -> f
     return score / n if n else 0.0
 
 
+def barge_in_success_rate(conversation: Conversation, run: ConversationRun) -> float:
+    """Fraction of user-interrupted turns the pipeline yielded inside the budget."""
+    user_turns = [t for t in conversation.turns if t.role is TurnRole.USER]
+    interruptible = [t for t in user_turns if t.interrupted]
+    if not interruptible:
+        return 1.0
+    yielded = 0
+    for ut in interruptible:
+        idx = user_turns.index(ut)
+        if idx >= len(run.turn_runs):
+            continue
+        tr = run.turn_runs[idx]
+        if any(s.name == "tts_first_byte" for s in tr.spans):
+            yielded += 1
+    return yielded / len(interruptible)
+
+
 def _find_span(spans: list[PipelineSpan], name: str) -> PipelineSpan | None:
     for s in spans:
         if s.name == name:
