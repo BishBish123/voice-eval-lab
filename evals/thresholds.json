@@ -1,0 +1,11 @@
+{
+  "latency_p95_ms": 10.0,
+  "wer": 0.02,
+  "faithfulness": 0.05,
+  "barge_in": 0.05,
+  "false_trigger": 0.02,
+  "barge_in_latency_p95_ms": 25.0,
+  "tts_first_byte_jitter_ms": 5.0,
+  "endpointing": 0.02,
+  "decisiveness": 0.05
+}
