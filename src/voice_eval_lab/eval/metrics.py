@@ -78,6 +78,12 @@ def barge_in_success_rate(conversation: Conversation, run: ConversationRun) -> f
     return yielded / len(interruptible)
 
 
+def false_trigger_rate(run: ConversationRun) -> float:
+    if not run.turn_runs:
+        return 0.0
+    return sum(1 for tr in run.turn_runs if tr.false_trigger) / len(run.turn_runs)
+
+
 def _find_span(spans: list[PipelineSpan], name: str) -> PipelineSpan | None:
     for s in spans:
         if s.name == name:
