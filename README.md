@@ -172,8 +172,9 @@ make install
 # Run the harness on the bundled golden set with the bundled mock pipeline.
 uv run voice-eval run --out evals/REPORT.md --json evals/scores.json
 
-# Inject WER to exercise the metric.
-uv run voice-eval run --wer-substitution-rate 0.2
+# Inject WER to exercise the metric. Matches `make eval-canonical`'s
+# tracked `evals/REPORT.with-wer-injection.md` (3.19% corpus WER).
+uv run voice-eval run --wer-substitution-rate 0.1
 
 # Force a synthetic false-trigger turn.
 uv run voice-eval run --false-trigger-rate 1.0
