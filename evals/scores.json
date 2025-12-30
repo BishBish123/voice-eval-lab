@@ -1,0 +1,71 @@
+{
+  "n_conversations": 4,
+  "aggregate_turn_latency": {
+    "p50_ms": 275.0,
+    "p95_ms": 275.0,
+    "p99_ms": 275.0,
+    "n": 6
+  },
+  "aggregate_wer": 0.03835227272727273,
+  "aggregate_faithfulness": 0.75,
+  "aggregate_barge_in_success": 1.0,
+  "aggregate_false_trigger_rate": 0.0,
+  "per_conversation": [
+    {
+      "conv_id": "postgres-replication",
+      "topic": "Postgres replication basics",
+      "turn_latency": {
+        "p50_ms": 275.0,
+        "p95_ms": 275.0,
+        "p99_ms": 275.0,
+        "n": 2
+      },
+      "transcription_wer": 0.0625,
+      "response_faithfulness": 1.0,
+      "barge_in_success_rate": 1.0,
+      "false_trigger_rate": 0.0
+    },
+    {
+      "conv_id": "hnsw-tuning",
+      "topic": "HNSW index tuning",
+      "turn_latency": {
+        "p50_ms": 275.0,
+        "p95_ms": 275.0,
+        "p99_ms": 275.0,
+        "n": 2
+      },
+      "transcription_wer": 0.0,
+      "response_faithfulness": 0.0,
+      "barge_in_success_rate": 1.0,
+      "false_trigger_rate": 0.0
+    },
+    {
+      "conv_id": "prom-burn-rate",
+      "topic": "Prometheus SLO burn rate",
+      "turn_latency": {
+        "p50_ms": 275.0,
+        "p95_ms": 275.0,
+        "p99_ms": 275.0,
+        "n": 1
+      },
+      "transcription_wer": 0.09090909090909091,
+      "response_faithfulness": 1.0,
+      "barge_in_success_rate": 1.0,
+      "false_trigger_rate": 0.0
+    },
+    {
+      "conv_id": "empty-noise",
+      "topic": "False-trigger handling",
+      "turn_latency": {
+        "p50_ms": 275.0,
+        "p95_ms": 275.0,
+        "p99_ms": 275.0,
+        "n": 1
+      },
+      "transcription_wer": 0.0,
+      "response_faithfulness": 1.0,
+      "barge_in_success_rate": 1.0,
+      "false_trigger_rate": 0.0
+    }
+  ]
+}
