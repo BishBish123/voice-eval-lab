@@ -46,7 +46,7 @@ signature and the same metric semantics.
 
 - **>80%** target. Below 70% means the LLM is hallucinating answers
   that the gold-fact set could ground if the prompt was right.
-- The bundled mock LLM produces **~62%** because it's wired to
+- The bundled mock LLM produces **61.54%** because it's wired to
   surface only the first-matching gold fact, so multi-turn conversations
   in the golden set leave later turns ungrounded — see the
   per-conversation table for the breakdown.
