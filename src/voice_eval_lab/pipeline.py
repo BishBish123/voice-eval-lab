@@ -164,6 +164,18 @@ class VoicePipeline:
             ]
 
             interrupted = user_turn.interrupted
+            if interrupted:
+                # When the user barges in, the pipeline yields shortly after
+                # vad_end. The yield latency is captured as a span so the
+                # `barge_in_latency_p95` metric can read it.
+                spans.append(
+                    PipelineSpan(
+                        name="barge_in.yield",
+                        started_at_ms=user_turn.ended_at_ms,
+                        ended_at_ms=user_turn.ended_at_ms + self.barge_in_yield_ms,
+                        attrs={"budget_ms": str(self.barge_in_yield_ms)},
+                    )
+                )
             runs.append(
                 TurnRun(
                     user_turn_index=i,
