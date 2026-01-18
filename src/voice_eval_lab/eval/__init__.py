@@ -4,6 +4,7 @@ from voice_eval_lab.eval.golden import default_golden_set
 from voice_eval_lab.eval.metrics import (
     ConversationScore,
     EvalReport,
+    barge_in_latency_p95_ms,
     barge_in_success_rate,
     false_trigger_rate,
     response_faithfulness,
@@ -16,6 +17,7 @@ from voice_eval_lab.eval.metrics import (
 __all__ = [
     "ConversationScore",
     "EvalReport",
+    "barge_in_latency_p95_ms",
     "barge_in_success_rate",
     "default_golden_set",
     "false_trigger_rate",

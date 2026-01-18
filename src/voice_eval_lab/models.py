@@ -97,6 +97,10 @@ class ConversationScore(BaseModel):
     false_trigger_rate: float = Field(
         description="Fraction of agent replies started while the user was not speaking."
     )
+    barge_in_latency_p95_ms: float = Field(
+        default=0.0,
+        description="p95 latency from interrupt to TTS yield (ms); 0 when no barge-ins.",
+    )
 
 
 class EvalReport(BaseModel):
@@ -106,4 +110,5 @@ class EvalReport(BaseModel):
     aggregate_faithfulness: float
     aggregate_barge_in_success: float
     aggregate_false_trigger_rate: float
+    aggregate_barge_in_latency_p95_ms: float = 0.0
     per_conversation: list[ConversationScore]

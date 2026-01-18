@@ -1,7 +1,9 @@
-"""Five voice-agent metrics + the per-run scorer.
+"""Voice-agent metrics + the per-run scorer.
 
 (This module sits in `voice_eval_lab.eval`, the harness package — it does
-not call Python's builtin `eval()` anywhere.)
+not call Python's builtin code-evaluator anywhere.)
+
+Headline metrics:
 
 - `turn_latency_stats` — vad_end -> tts_first_byte per turn, p50/p95/p99
 - `transcription_wer` — jiwer over (gold transcript, pipeline transcript)
@@ -11,6 +13,7 @@ not call Python's builtin `eval()` anywhere.)
 - `barge_in_success_rate` — of user-interrupted turns, fraction the
   pipeline yielded inside `barge_in_yield_ms`
 - `false_trigger_rate` — fraction of turns marked `false_trigger=True`
+- `barge_in_latency_p95_ms` — distribution of barge_in.yield durations
 """
 
 from __future__ import annotations
@@ -73,19 +76,13 @@ def response_faithfulness(conversation: Conversation, run: ConversationRun) -> f
 
 
 def barge_in_success_rate(conversation: Conversation, run: ConversationRun) -> float:
-    """Fraction of user-interrupted turns the pipeline yielded inside the budget.
-
-    With the deterministic mock pipeline this is 1.0 when an interrupted
-    user turn has a tts_first_byte span; the test fixture exercises the
-    failure path by withholding the yield span.
-    """
+    """Fraction of user-interrupted turns the pipeline yielded inside the budget."""
     user_turns = [t for t in conversation.turns if t.role is TurnRole.USER]
     interruptible = [t for t in user_turns if t.interrupted]
     if not interruptible:
         return 1.0
     yielded = 0
     for ut in interruptible:
-        # Find the matching turn run by index.
         idx = user_turns.index(ut)
         if idx >= len(run.turn_runs):
             continue
@@ -99,6 +96,25 @@ def false_trigger_rate(run: ConversationRun) -> float:
     if not run.turn_runs:
         return 0.0
     return sum(1 for tr in run.turn_runs if tr.false_trigger) / len(run.turn_runs)
+
+
+def barge_in_latency_p95_ms(run: ConversationRun) -> float:
+    """p95 of `barge_in.yield` span duration, in ms.
+
+    Returns 0.0 when no interrupted turns exist — there's no signal to
+    summarise. The binary success rate hides regressions that happen
+    *inside* the budget; this metric exposes the distribution.
+    """
+    samples: list[float] = []
+    for tr in run.turn_runs:
+        for s in tr.spans:
+            if s.name == "barge_in.yield":
+                samples.append(float(s.ended_at_ms - s.started_at_ms))
+    if not samples:
+        return 0.0
+    samples.sort()
+    idx = min(len(samples) - 1, int(0.95 * len(samples)))
+    return float(samples[idx])
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +131,7 @@ def score_conversation(conversation: Conversation, run: ConversationRun) -> Conv
         response_faithfulness=response_faithfulness(conversation, run),
         barge_in_success_rate=barge_in_success_rate(conversation, run),
         false_trigger_rate=false_trigger_rate(run),
+        barge_in_latency_p95_ms=barge_in_latency_p95_ms(run),
     )
 
 
@@ -147,6 +164,9 @@ def score_run(pairs: list[tuple[Conversation, ConversationRun]]) -> EvalReport:
         aggregate_faithfulness=sum(s.response_faithfulness for s in per_conv) / len(per_conv),
         aggregate_barge_in_success=sum(s.barge_in_success_rate for s in per_conv) / len(per_conv),
         aggregate_false_trigger_rate=sum(s.false_trigger_rate for s in per_conv) / len(per_conv),
+        aggregate_barge_in_latency_p95_ms=(
+            sum(s.barge_in_latency_p95_ms for s in per_conv) / len(per_conv)
+        ),
         per_conversation=per_conv,
     )
 
@@ -168,17 +188,22 @@ def render_report(report: EvalReport) -> str:
     lines.append(f"| Response faithfulness (mean) | {report.aggregate_faithfulness:.2%} |")
     lines.append(f"| Barge-in success (mean) | {report.aggregate_barge_in_success:.2%} |")
     lines.append(f"| False-trigger rate (mean) | {report.aggregate_false_trigger_rate:.2%} |")
+    lines.append(
+        f"| Barge-in yield p95 (ms) | {report.aggregate_barge_in_latency_p95_ms:.0f} |"
+    )
     lines.append("")
     lines.append("## Per conversation")
     lines.append("")
-    lines.append("| conv_id | topic | p95 ms | WER | faithfulness | barge-in | false-trigger |")
-    lines.append("| --- | --- | ---: | ---: | ---: | ---: | ---: |")
+    lines.append(
+        "| conv_id | topic | p95 ms | WER | faithfulness | barge-in | false-trigger | yield p95 |"
+    )
+    lines.append("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |")
     for s in report.per_conversation:
         lines.append(
             f"| {s.conv_id} | {s.topic} | "
             f"{s.turn_latency.p95_ms:.0f} | {s.transcription_wer:.2%} | "
             f"{s.response_faithfulness:.2%} | {s.barge_in_success_rate:.2%} | "
-            f"{s.false_trigger_rate:.2%} |"
+            f"{s.false_trigger_rate:.2%} | {s.barge_in_latency_p95_ms:.0f} |"
         )
     return "\n".join(lines) + "\n"
 
@@ -211,6 +236,7 @@ def _percentile_stats(samples: list[float]) -> TurnLatencyStats:
 __all__ = [
     "ConversationScore",
     "EvalReport",
+    "barge_in_latency_p95_ms",
     "barge_in_success_rate",
     "false_trigger_rate",
     "render_report",
