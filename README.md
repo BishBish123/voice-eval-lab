@@ -164,6 +164,13 @@ ADRs: [`docs/adr/`](docs/adr).
 
 ## Quick start
 
+> **macOS note:** every `voice-eval` write path refuses symlinked
+> parents (security guard against pre-planted links redirecting the
+> output). On macOS `/tmp` is a symlink to `/private/tmp`, so paths
+> like `--out /tmp/report.md` exit with code 2. Use `/private/tmp/...`
+> or a project-relative path (the error message also prints the
+> resolved path you can retry with).
+
 ```bash
 git clone https://github.com/BishBish123/voice-eval-lab.git
 cd voice-eval-lab
