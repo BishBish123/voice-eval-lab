@@ -101,6 +101,10 @@ class ConversationScore(BaseModel):
         default=0.0,
         description="p95 latency from interrupt to TTS yield (ms); 0 when no barge-ins.",
     )
+    tts_first_byte_jitter_ms: float = Field(
+        default=0.0,
+        description="Std-dev of first-byte latency across turns (ms).",
+    )
 
 
 class EvalReport(BaseModel):
@@ -111,4 +115,5 @@ class EvalReport(BaseModel):
     aggregate_barge_in_success: float
     aggregate_false_trigger_rate: float
     aggregate_barge_in_latency_p95_ms: float = 0.0
+    aggregate_tts_first_byte_jitter_ms: float = 0.0
     per_conversation: list[ConversationScore]

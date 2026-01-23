@@ -18,6 +18,8 @@ Headline metrics:
 
 from __future__ import annotations
 
+import math
+
 import jiwer
 
 from voice_eval_lab.models import (
@@ -117,6 +119,27 @@ def barge_in_latency_p95_ms(run: ConversationRun) -> float:
     return float(samples[idx])
 
 
+def tts_first_byte_jitter_ms(run: ConversationRun) -> float:
+    """Population standard deviation of first-byte latency, in ms.
+
+    The percentile stats fold the distribution into three numbers; this
+    one number tells you whether the agent's audio start *feels* steady.
+    Returns 0.0 for fewer than 2 samples.
+    """
+    samples: list[float] = []
+    for tr in run.turn_runs:
+        vad = _find_span(tr.spans, "vad_end")
+        fb = _find_span(tr.spans, "tts_first_byte")
+        if vad is None or fb is None:
+            continue
+        samples.append(float(fb.ended_at_ms - vad.ended_at_ms))
+    if len(samples) < 2:
+        return 0.0
+    mean = sum(samples) / len(samples)
+    var = sum((x - mean) ** 2 for x in samples) / len(samples)
+    return math.sqrt(var)
+
+
 # ---------------------------------------------------------------------------
 # Per-conversation + aggregate scoring
 # ---------------------------------------------------------------------------
@@ -132,6 +155,7 @@ def score_conversation(conversation: Conversation, run: ConversationRun) -> Conv
         barge_in_success_rate=barge_in_success_rate(conversation, run),
         false_trigger_rate=false_trigger_rate(run),
         barge_in_latency_p95_ms=barge_in_latency_p95_ms(run),
+        tts_first_byte_jitter_ms=tts_first_byte_jitter_ms(run),
     )
 
 
@@ -167,6 +191,9 @@ def score_run(pairs: list[tuple[Conversation, ConversationRun]]) -> EvalReport:
         aggregate_barge_in_latency_p95_ms=(
             sum(s.barge_in_latency_p95_ms for s in per_conv) / len(per_conv)
         ),
+        aggregate_tts_first_byte_jitter_ms=(
+            sum(s.tts_first_byte_jitter_ms for s in per_conv) / len(per_conv)
+        ),
         per_conversation=per_conv,
     )
 
@@ -191,19 +218,23 @@ def render_report(report: EvalReport) -> str:
     lines.append(
         f"| Barge-in yield p95 (ms) | {report.aggregate_barge_in_latency_p95_ms:.0f} |"
     )
+    lines.append(
+        f"| TTS first-byte jitter (ms) | {report.aggregate_tts_first_byte_jitter_ms:.1f} |"
+    )
     lines.append("")
     lines.append("## Per conversation")
     lines.append("")
     lines.append(
-        "| conv_id | topic | p95 ms | WER | faithfulness | barge-in | false-trigger | yield p95 |"
+        "| conv_id | topic | p95 ms | WER | faithfulness | barge-in | false-trigger | yield p95 | jitter |"
     )
-    lines.append("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |")
+    lines.append("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
     for s in report.per_conversation:
         lines.append(
             f"| {s.conv_id} | {s.topic} | "
             f"{s.turn_latency.p95_ms:.0f} | {s.transcription_wer:.2%} | "
             f"{s.response_faithfulness:.2%} | {s.barge_in_success_rate:.2%} | "
-            f"{s.false_trigger_rate:.2%} | {s.barge_in_latency_p95_ms:.0f} |"
+            f"{s.false_trigger_rate:.2%} | {s.barge_in_latency_p95_ms:.0f} | "
+            f"{s.tts_first_byte_jitter_ms:.1f} |"
         )
     return "\n".join(lines) + "\n"
 
@@ -244,5 +275,6 @@ __all__ = [
     "score_conversation",
     "score_run",
     "transcription_wer",
+    "tts_first_byte_jitter_ms",
     "turn_latency_stats",
 ]
