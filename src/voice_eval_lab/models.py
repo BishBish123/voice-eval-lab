@@ -105,6 +105,10 @@ class ConversationScore(BaseModel):
         default=0.0,
         description="Std-dev of first-byte latency across turns (ms).",
     )
+    endpointing_accuracy: float = Field(
+        default=1.0,
+        description="Fraction of user turns where VAD end aligned with utterance end (±tolerance).",
+    )
 
 
 class EvalReport(BaseModel):
@@ -116,4 +120,5 @@ class EvalReport(BaseModel):
     aggregate_false_trigger_rate: float
     aggregate_barge_in_latency_p95_ms: float = 0.0
     aggregate_tts_first_byte_jitter_ms: float = 0.0
+    aggregate_endpointing_accuracy: float = 1.0
     per_conversation: list[ConversationScore]

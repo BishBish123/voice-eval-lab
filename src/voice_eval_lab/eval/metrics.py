@@ -140,6 +140,32 @@ def tts_first_byte_jitter_ms(run: ConversationRun) -> float:
     return math.sqrt(var)
 
 
+def endpointing_accuracy(
+    conversation: Conversation, run: ConversationRun, tolerance_ms: int = 50
+) -> float:
+    """Fraction of user turns where VAD-end aligned with the gold utterance end.
+
+    The mock pipeline always lines them up exactly so the headline value
+    is 1.0; the metric exists so a real pipeline (whose VAD will be early
+    or late) gets scored on a known axis.
+    """
+    user_turns = [t for t in conversation.turns if t.role is TurnRole.USER]
+    if not user_turns:
+        return 1.0
+    aligned = 0
+    counted = 0
+    for ut, tr in zip(user_turns, run.turn_runs, strict=False):
+        vad = _find_span(tr.spans, "vad_end")
+        if vad is None:
+            continue
+        counted += 1
+        if abs(vad.ended_at_ms - ut.ended_at_ms) <= tolerance_ms:
+            aligned += 1
+    if counted == 0:
+        return 1.0
+    return aligned / counted
+
+
 # ---------------------------------------------------------------------------
 # Per-conversation + aggregate scoring
 # ---------------------------------------------------------------------------
@@ -156,6 +182,7 @@ def score_conversation(conversation: Conversation, run: ConversationRun) -> Conv
         false_trigger_rate=false_trigger_rate(run),
         barge_in_latency_p95_ms=barge_in_latency_p95_ms(run),
         tts_first_byte_jitter_ms=tts_first_byte_jitter_ms(run),
+        endpointing_accuracy=endpointing_accuracy(conversation, run),
     )
 
 
@@ -194,6 +221,9 @@ def score_run(pairs: list[tuple[Conversation, ConversationRun]]) -> EvalReport:
         aggregate_tts_first_byte_jitter_ms=(
             sum(s.tts_first_byte_jitter_ms for s in per_conv) / len(per_conv)
         ),
+        aggregate_endpointing_accuracy=(
+            sum(s.endpointing_accuracy for s in per_conv) / len(per_conv)
+        ),
         per_conversation=per_conv,
     )
 
@@ -221,20 +251,23 @@ def render_report(report: EvalReport) -> str:
     lines.append(
         f"| TTS first-byte jitter (ms) | {report.aggregate_tts_first_byte_jitter_ms:.1f} |"
     )
+    lines.append(
+        f"| Endpointing accuracy (mean) | {report.aggregate_endpointing_accuracy:.2%} |"
+    )
     lines.append("")
     lines.append("## Per conversation")
     lines.append("")
     lines.append(
-        "| conv_id | topic | p95 ms | WER | faithfulness | barge-in | false-trigger | yield p95 | jitter |"
+        "| conv_id | topic | p95 ms | WER | faithfulness | barge-in | false-trigger | yield p95 | jitter | endpoint |"
     )
-    lines.append("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+    lines.append("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
     for s in report.per_conversation:
         lines.append(
             f"| {s.conv_id} | {s.topic} | "
             f"{s.turn_latency.p95_ms:.0f} | {s.transcription_wer:.2%} | "
             f"{s.response_faithfulness:.2%} | {s.barge_in_success_rate:.2%} | "
             f"{s.false_trigger_rate:.2%} | {s.barge_in_latency_p95_ms:.0f} | "
-            f"{s.tts_first_byte_jitter_ms:.1f} |"
+            f"{s.tts_first_byte_jitter_ms:.1f} | {s.endpointing_accuracy:.2%} |"
         )
     return "\n".join(lines) + "\n"
 
@@ -269,6 +302,7 @@ __all__ = [
     "EvalReport",
     "barge_in_latency_p95_ms",
     "barge_in_success_rate",
+    "endpointing_accuracy",
     "false_trigger_rate",
     "render_report",
     "response_faithfulness",
