@@ -109,6 +109,10 @@ class ConversationScore(BaseModel):
         default=1.0,
         description="Fraction of user turns where VAD end aligned with utterance end (±tolerance).",
     )
+    llm_decisiveness: float = Field(
+        default=1.0,
+        description="Fraction of agent replies that don't hedge ('I don't know', 'maybe', ...).",
+    )
 
 
 class EvalReport(BaseModel):
@@ -121,4 +125,5 @@ class EvalReport(BaseModel):
     aggregate_barge_in_latency_p95_ms: float = 0.0
     aggregate_tts_first_byte_jitter_ms: float = 0.0
     aggregate_endpointing_accuracy: float = 1.0
+    aggregate_llm_decisiveness: float = 1.0
     per_conversation: list[ConversationScore]

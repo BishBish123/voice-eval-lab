@@ -33,6 +33,17 @@ from voice_eval_lab.models import (
     TurnRun,
 )
 
+HEDGING_PHRASES = (
+    "i don't have a confident answer",
+    "i'm not sure",
+    "i don't know",
+    "maybe",
+    "perhaps",
+    "i think",
+    "could be",
+    "i can't say",
+)
+
 
 def turn_latency_stats(turn_runs: list[TurnRun]) -> TurnLatencyStats:
     """Per-turn latency = first-byte minus vad_end, in ms."""
@@ -166,6 +177,29 @@ def endpointing_accuracy(
     return aligned / counted
 
 
+def llm_decisiveness(run: ConversationRun) -> float:
+    """Fraction of agent replies that don't contain a hedging phrase.
+
+    False-trigger turns are excluded — the agent is *supposed* to dodge
+    those. Empty replies count as hedging (no signal = no commitment).
+    """
+    counted = 0
+    decisive = 0
+    for tr in run.turn_runs:
+        if tr.false_trigger:
+            continue
+        counted += 1
+        reply = tr.agent_reply.lower()
+        if not reply.strip():
+            continue
+        if any(phrase in reply for phrase in HEDGING_PHRASES):
+            continue
+        decisive += 1
+    if counted == 0:
+        return 1.0
+    return decisive / counted
+
+
 # ---------------------------------------------------------------------------
 # Per-conversation + aggregate scoring
 # ---------------------------------------------------------------------------
@@ -183,6 +217,7 @@ def score_conversation(conversation: Conversation, run: ConversationRun) -> Conv
         barge_in_latency_p95_ms=barge_in_latency_p95_ms(run),
         tts_first_byte_jitter_ms=tts_first_byte_jitter_ms(run),
         endpointing_accuracy=endpointing_accuracy(conversation, run),
+        llm_decisiveness=llm_decisiveness(run),
     )
 
 
@@ -224,6 +259,7 @@ def score_run(pairs: list[tuple[Conversation, ConversationRun]]) -> EvalReport:
         aggregate_endpointing_accuracy=(
             sum(s.endpointing_accuracy for s in per_conv) / len(per_conv)
         ),
+        aggregate_llm_decisiveness=(sum(s.llm_decisiveness for s in per_conv) / len(per_conv)),
         per_conversation=per_conv,
     )
 
@@ -254,20 +290,25 @@ def render_report(report: EvalReport) -> str:
     lines.append(
         f"| Endpointing accuracy (mean) | {report.aggregate_endpointing_accuracy:.2%} |"
     )
+    lines.append(f"| LLM decisiveness (mean) | {report.aggregate_llm_decisiveness:.2%} |")
     lines.append("")
     lines.append("## Per conversation")
     lines.append("")
     lines.append(
-        "| conv_id | topic | p95 ms | WER | faithfulness | barge-in | false-trigger | yield p95 | jitter | endpoint |"
+        "| conv_id | topic | p95 ms | WER | faithfulness | "
+        "barge-in | false-trigger | yield p95 | jitter | endpoint | decisive |"
     )
-    lines.append("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+    lines.append(
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
+    )
     for s in report.per_conversation:
         lines.append(
             f"| {s.conv_id} | {s.topic} | "
             f"{s.turn_latency.p95_ms:.0f} | {s.transcription_wer:.2%} | "
             f"{s.response_faithfulness:.2%} | {s.barge_in_success_rate:.2%} | "
             f"{s.false_trigger_rate:.2%} | {s.barge_in_latency_p95_ms:.0f} | "
-            f"{s.tts_first_byte_jitter_ms:.1f} | {s.endpointing_accuracy:.2%} |"
+            f"{s.tts_first_byte_jitter_ms:.1f} | {s.endpointing_accuracy:.2%} | "
+            f"{s.llm_decisiveness:.2%} |"
         )
     return "\n".join(lines) + "\n"
 
@@ -304,6 +345,7 @@ __all__ = [
     "barge_in_success_rate",
     "endpointing_accuracy",
     "false_trigger_rate",
+    "llm_decisiveness",
     "render_report",
     "response_faithfulness",
     "score_conversation",
