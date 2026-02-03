@@ -53,19 +53,29 @@ class TTS(Protocol):
 
 @dataclass
 class MockSTT:
-    """Returns the gold transcript with a configurable WER injected."""
+    """Returns the gold transcript with a configurable WER injected.
+
+    The substitution rate can be overridden per-turn via
+    `Turn.wer_substitution_rate`, which is useful for A/B-style scenarios
+    where a single conversation should mix clean and noisy audio.
+    """
 
     wer_substitution_rate: float = 0.0
     latency_ms: int = 80
 
     async def transcribe(self, turn: Turn) -> tuple[str, list[PipelineSpan]]:
-        text = _inject_wer(turn.text, self.wer_substitution_rate)
+        rate = (
+            turn.wer_substitution_rate
+            if turn.wer_substitution_rate is not None
+            else self.wer_substitution_rate
+        )
+        text = _inject_wer(turn.text, rate)
         spans = [
             PipelineSpan(
                 name="stt.transcribe",
                 started_at_ms=turn.ended_at_ms,
                 ended_at_ms=turn.ended_at_ms + self.latency_ms,
-                attrs={"engine": "mock", "wer_injected": str(self.wer_substitution_rate)},
+                attrs={"engine": "mock", "wer_injected": str(rate)},
             )
         ]
         return text, spans

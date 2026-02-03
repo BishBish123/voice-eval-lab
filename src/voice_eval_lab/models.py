@@ -20,6 +20,11 @@ class Turn(BaseModel):
     started_at_ms: int = Field(description="Audio frame index when speech started")
     ended_at_ms: int = Field(description="Audio frame index when speech ended")
     interrupted: bool = False
+    # Per-turn WER override for the mock STT (None = use the global rate).
+    wer_substitution_rate: float | None = Field(
+        default=None,
+        description="Per-turn override for the mock STT word substitution rate.",
+    )
 
 
 class Conversation(BaseModel):
