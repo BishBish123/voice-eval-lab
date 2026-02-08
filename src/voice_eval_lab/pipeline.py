@@ -13,7 +13,7 @@ behind the same Protocol surface.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -111,6 +111,24 @@ class MockLLM:
             )
         ]
         return text, spans
+
+    async def stream(
+        self,
+        history: list[Turn],
+        last_user_text: str,
+        gold_facts: list[str],
+        chunk_size: int = 4,
+    ) -> AsyncIterator[str]:
+        """Token-streaming variant — yields word chunks of the same reply.
+
+        Real LLMs interleave with TTS so the first audio byte fires before
+        the LLM finishes. Tests use this to assert the streaming contract
+        without coupling to wall-clock time.
+        """
+        text, _ = await self.reply(history, last_user_text, gold_facts)
+        words = text.split()
+        for i in range(0, len(words), chunk_size):
+            yield " ".join(words[i : i + chunk_size])
 
 
 @dataclass
