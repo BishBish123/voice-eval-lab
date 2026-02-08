@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -58,6 +59,61 @@ def _validate_unit_interval(value: float) -> float:
     return value
 
 
+def _validate_compare_threshold_value(key: str, val: object) -> float:
+    """Validate one compare-threshold value, returning a finite non-negative float.
+
+    Rejects:
+
+    - ``bool`` (Python's ``True`` / ``False`` are subclasses of ``int``,
+      so a bare ``isinstance(val, (int, float))`` happily coerces them
+      to ``1.0`` / ``0.0`` and silently disables regression detection
+      for the affected metric — check ``type(val) is bool`` *before*
+      the numeric isinstance).
+    - ``NaN`` / ``Infinity`` — Python's ``json.loads`` admits both as
+      JSON numbers, and any later ``delta > nan`` comparison is always
+      ``False``, so an attacker (or a typo) could disable a regression
+      gate without an error.
+    - Negative values — a negative tolerance would treat *any* drop as
+      a regression (or *no* drop), neither of which is what an operator
+      meant.
+
+    Raises ``ValueError`` naming the offending key on any rejection so
+    the caller can surface a clear CLI / config error.
+    """
+    if type(val) is bool:
+        raise ValueError(
+            f"threshold value for {key!r} must be a number, got bool ({val!r})"
+        )
+    if not isinstance(val, (int, float)):
+        raise ValueError(
+            f"threshold value for {key!r} must be a number, got {val!r}"
+        )
+    fval = float(val)
+    if math.isnan(fval) or math.isinf(fval):
+        raise ValueError(
+            f"threshold value for {key!r} must be finite, got {val!r}"
+        )
+    if fval < 0:
+        raise ValueError(
+            f"threshold value for {key!r} must be non-negative, got {val!r}"
+        )
+    return fval
+
+
+def _validate_compare_threshold_flag(value: float) -> float:
+    """Typer callback: reject NaN, Infinity, or negative compare-threshold flags.
+
+    typer parses ``--latency-threshold-ms`` / ``--wer-threshold`` /
+    ``--faithfulness-threshold`` as ``float``, which silently accepts
+    ``nan`` and ``inf`` from the shell.  Apply the same finite +
+    non-negative gate the JSON config path uses.
+    """
+    try:
+        return _validate_compare_threshold_value("<flag>", value)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from None
+
+
 def _load_thresholds_config(path: Path) -> dict[str, float]:
     """Load a JSON thresholds-config file and return a validated {key: float} dict.
 
@@ -95,12 +151,11 @@ def _load_thresholds_config(path: Path) -> dict[str, float]:
                 f"[red]unknown threshold key {key!r}[/] (valid: {sorted(valid_keys)})"
             )
             raise typer.Exit(code=2) from None
-        if not isinstance(val, (int, float)):
-            console.print(
-                f"[red]threshold value for {key!r} must be a number, got {val!r}[/]"
-            )
+        try:
+            result[key] = _validate_compare_threshold_value(key, val)
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/]")
             raise typer.Exit(code=2) from None
-        result[key] = float(val)
     return result
 
 
@@ -279,10 +334,20 @@ def compare(
     ),
     wer_substitution_rate: float = typer.Option(0.0, callback=_validate_unit_interval),
     false_trigger_rate: float = typer.Option(0.0, callback=_validate_unit_interval),
-    latency_threshold_ms: float = typer.Option(10.0, help="Allowed p95 latency increase (ms)."),
-    wer_threshold: float = typer.Option(0.02, help="Allowed WER increase (fraction)."),
+    latency_threshold_ms: float = typer.Option(
+        10.0,
+        help="Allowed p95 latency increase (ms).",
+        callback=_validate_compare_threshold_flag,
+    ),
+    wer_threshold: float = typer.Option(
+        0.02,
+        help="Allowed WER increase (fraction).",
+        callback=_validate_compare_threshold_flag,
+    ),
     faithfulness_threshold: float = typer.Option(
-        0.05, help="Allowed faithfulness drop (fraction)."
+        0.05,
+        help="Allowed faithfulness drop (fraction).",
+        callback=_validate_compare_threshold_flag,
     ),
     thresholds_config: Path | None = typer.Option(
         None,

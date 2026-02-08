@@ -383,6 +383,88 @@ class TestCompareThresholdsConfig:
         result = runner.invoke(app, ["compare", "--baseline", str(bl), "--thresholds-config", str(cfg)])
         assert result.exit_code == 2
 
+    def test_thresholds_config_bool_value_exits_2(self, tmp_path: Path) -> None:
+        # JSON ``true`` is admitted by isinstance(int, float) — Python's
+        # ``True`` is an int subclass — so a bare numeric check would
+        # silently coerce ``true`` -> ``1.0`` and disable the gate for
+        # that metric. Reject explicitly.
+        bl = self._baseline(tmp_path)
+        cfg = tmp_path / "thresholds.json"
+        cfg.write_text('{"wer": true}')
+        result = runner.invoke(
+            app, ["compare", "--baseline", str(bl), "--thresholds-config", str(cfg)]
+        )
+        assert result.exit_code == 2
+        assert "wer" in result.output.lower()
+
+    def test_thresholds_config_nan_value_exits_2(self, tmp_path: Path) -> None:
+        # json.loads accepts NaN; comparisons against NaN are always
+        # False so any later regression check would silently pass.
+        bl = self._baseline(tmp_path)
+        cfg = tmp_path / "thresholds.json"
+        cfg.write_text('{"wer": NaN}')
+        result = runner.invoke(
+            app, ["compare", "--baseline", str(bl), "--thresholds-config", str(cfg)]
+        )
+        assert result.exit_code == 2
+        assert "wer" in result.output.lower()
+
+    def test_thresholds_config_infinity_value_exits_2(self, tmp_path: Path) -> None:
+        # An infinite tolerance is just "never gate" — make the operator
+        # say so explicitly instead of silently permitting a typo.
+        bl = self._baseline(tmp_path)
+        cfg = tmp_path / "thresholds.json"
+        cfg.write_text('{"wer": Infinity}')
+        result = runner.invoke(
+            app, ["compare", "--baseline", str(bl), "--thresholds-config", str(cfg)]
+        )
+        assert result.exit_code == 2
+        assert "wer" in result.output.lower()
+
+    def test_thresholds_config_negative_value_exits_2(self, tmp_path: Path) -> None:
+        # Negative tolerance has no defensible meaning for any of the
+        # ratio / latency thresholds (they're all "allowed positive
+        # increase / drop"). Reject so a typo can't invert the gate.
+        bl = self._baseline(tmp_path)
+        cfg = tmp_path / "thresholds.json"
+        cfg.write_text('{"wer": -1.0}')
+        result = runner.invoke(
+            app, ["compare", "--baseline", str(bl), "--thresholds-config", str(cfg)]
+        )
+        assert result.exit_code == 2
+        assert "wer" in result.output.lower()
+
+    def test_compare_flag_nan_rejected(self, tmp_path: Path) -> None:
+        # The same gate applies to direct compare-threshold flags:
+        # typer parses ``--latency-threshold-ms NaN`` to a float, so the
+        # callback has to reject it before it reaches RegressionThresholds.
+        bl = self._baseline(tmp_path)
+        result = runner.invoke(
+            app,
+            [
+                "compare",
+                "--baseline",
+                str(bl),
+                "--latency-threshold-ms",
+                "nan",
+            ],
+        )
+        assert result.exit_code != 0
+
+    def test_compare_flag_negative_rejected(self, tmp_path: Path) -> None:
+        bl = self._baseline(tmp_path)
+        result = runner.invoke(
+            app,
+            [
+                "compare",
+                "--baseline",
+                str(bl),
+                "--wer-threshold",
+                "-0.01",
+            ],
+        )
+        assert result.exit_code != 0
+
 
 class TestCompareErrors:
     def test_compare_missing_baseline_exits_2(self, tmp_path: Path) -> None:
