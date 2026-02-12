@@ -13,8 +13,9 @@ behind the same Protocol surface.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from voice_eval_lab.models import (
@@ -145,6 +146,61 @@ class MockTTS:
             )
         ]
         return self.first_byte_ms, spans
+
+
+@dataclass
+class FlakyTTS:
+    """A TTS adapter that fails the first `fail_n` calls then succeeds.
+
+    Used to exercise the `RetryingTTS` wrapper.
+    """
+
+    inner: TTS
+    fail_n: int = 1
+    _calls: int = field(default=0, init=False)
+
+    async def synthesize(self, text: str) -> tuple[int, list[PipelineSpan]]:
+        self._calls += 1
+        if self._calls <= self.fail_n:
+            raise RuntimeError(f"FlakyTTS scheduled failure #{self._calls}")
+        return await self.inner.synthesize(text)
+
+
+@dataclass
+class RetryingTTS:
+    """Decorator that wraps any TTS protocol with exponential-backoff retries.
+
+    Real TTS streams glitch under load — Cartesia / ElevenLabs both
+    document transient 5xx. The retry policy is intentionally bounded:
+    voice agents that can't yield first byte under ~600ms are unusable,
+    so we cap at `max_attempts` and surface the exception otherwise.
+    """
+
+    inner: TTS
+    max_attempts: int = 3
+    base_delay_ms: int = 25
+
+    async def synthesize(self, text: str) -> tuple[int, list[PipelineSpan]]:
+        last_exc: BaseException | None = None
+        retry_spans: list[PipelineSpan] = []
+        for attempt in range(1, self.max_attempts + 1):
+            try:
+                first_byte, spans = await self.inner.synthesize(text)
+                return first_byte, [*retry_spans, *spans]
+            except Exception as exc:
+                last_exc = exc
+                retry_spans.append(
+                    PipelineSpan(
+                        name="tts.retry",
+                        started_at_ms=0,
+                        ended_at_ms=self.base_delay_ms * (2 ** (attempt - 1)),
+                        attrs={"attempt": str(attempt), "error": type(exc).__name__},
+                    )
+                )
+                if attempt < self.max_attempts:
+                    await asyncio.sleep(0)  # cooperative yield, no real wall delay
+        assert last_exc is not None
+        raise last_exc
 
 
 # ---------------------------------------------------------------------------
