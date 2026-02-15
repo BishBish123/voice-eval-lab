@@ -209,12 +209,47 @@ class RetryingTTS:
 
 
 @dataclass
+class LatencyBudget:
+    """Middleware that flags turns whose first-byte latency blows the budget.
+
+    Voice agents have a hard ceiling — most users disengage past ~700ms
+    end-to-end. The middleware emits a `latency_budget.exceeded` span on
+    every turn that crosses `budget_ms`, which the metric layer can
+    surface in the report later.
+    """
+
+    budget_ms: int = 700
+
+    def annotate(self, run: ConversationRun) -> ConversationRun:
+        for tr in run.turn_runs:
+            vad = next((s for s in tr.spans if s.name == "vad_end"), None)
+            fb = next((s for s in tr.spans if s.name == "tts_first_byte"), None)
+            if vad is None or fb is None:
+                continue
+            latency = fb.ended_at_ms - vad.ended_at_ms
+            if latency > self.budget_ms:
+                tr.spans.append(
+                    PipelineSpan(
+                        name="latency_budget.exceeded",
+                        started_at_ms=fb.ended_at_ms,
+                        ended_at_ms=fb.ended_at_ms,
+                        attrs={
+                            "budget_ms": str(self.budget_ms),
+                            "observed_ms": str(latency),
+                        },
+                    )
+                )
+        return run
+
+
+@dataclass
 class VoicePipeline:
     stt: STT
     llm: LLM
     tts: TTS
     barge_in_yield_ms: int = 100
     false_trigger_rate: float = 0.0
+    latency_budget: LatencyBudget | None = None
 
     async def run(self, conversation: Conversation) -> ConversationRun:
         history: list[Turn] = []
@@ -286,12 +321,15 @@ class VoicePipeline:
                 )
             )
 
-        return ConversationRun(
+        run = ConversationRun(
             conv_id=conversation.conv_id,
             topic=conversation.topic,
             user_turns_played=played,
             turn_runs=runs,
         )
+        if self.latency_budget is not None:
+            run = self.latency_budget.annotate(run)
+        return run
 
 
 def _user_turns(turns: Iterable[Turn]) -> Iterable[Turn]:
