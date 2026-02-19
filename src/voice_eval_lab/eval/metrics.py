@@ -13,7 +13,17 @@ Headline metrics:
 - `barge_in_success_rate` — of user-interrupted turns, fraction the
   pipeline yielded inside `barge_in_yield_ms`
 - `false_trigger_rate` — fraction of turns marked `false_trigger=True`
-- `barge_in_latency_p95_ms` — distribution of barge_in.yield durations
+
+Diagnostic metrics (added after the v0.1 set proved coarse for tuning):
+
+- `barge_in_latency_p95` — p95 of the barge_in.yield span duration; the
+  binary success rate hides regressions inside the budget
+- `tts_first_byte_jitter` — std-dev of first-byte latency across turns;
+  reveals variance the percentile stats smear out
+- `endpointing_accuracy` — fraction of user turns where the VAD end span
+  lined up with the gold `ended_at_ms` (within tolerance)
+- `llm_decisiveness` — fraction of agent replies that don't hedge with
+  "I don't have a confident answer", "maybe", "I'm not sure", etc.
 """
 
 from __future__ import annotations
@@ -62,6 +72,8 @@ def transcription_wer(conversation: Conversation, run: ConversationRun) -> float
     references: list[str] = []
     hypotheses: list[str] = []
     for ut, tr in zip(user_turns, run.turn_runs, strict=False):
+        if not ut.text.strip():
+            continue
         references.append(ut.text)
         hypotheses.append(tr.transcribed_text)
     if not references:
@@ -89,13 +101,19 @@ def response_faithfulness(conversation: Conversation, run: ConversationRun) -> f
 
 
 def barge_in_success_rate(conversation: Conversation, run: ConversationRun) -> float:
-    """Fraction of user-interrupted turns the pipeline yielded inside the budget."""
+    """Fraction of user-interrupted turns the pipeline yielded inside the budget.
+
+    With the deterministic mock pipeline this is 1.0 when an interrupted
+    user turn has a tts_first_byte span; the test fixture exercises the
+    failure path by withholding the yield span.
+    """
     user_turns = [t for t in conversation.turns if t.role is TurnRole.USER]
     interruptible = [t for t in user_turns if t.interrupted]
     if not interruptible:
         return 1.0
     yielded = 0
     for ut in interruptible:
+        # Find the matching turn run by index.
         idx = user_turns.index(ut)
         if idx >= len(run.turn_runs):
             continue
@@ -281,15 +299,11 @@ def render_report(report: EvalReport) -> str:
     lines.append(f"| Response faithfulness (mean) | {report.aggregate_faithfulness:.2%} |")
     lines.append(f"| Barge-in success (mean) | {report.aggregate_barge_in_success:.2%} |")
     lines.append(f"| False-trigger rate (mean) | {report.aggregate_false_trigger_rate:.2%} |")
-    lines.append(
-        f"| Barge-in yield p95 (ms) | {report.aggregate_barge_in_latency_p95_ms:.0f} |"
-    )
+    lines.append(f"| Barge-in yield p95 (ms) | {report.aggregate_barge_in_latency_p95_ms:.0f} |")
     lines.append(
         f"| TTS first-byte jitter (ms) | {report.aggregate_tts_first_byte_jitter_ms:.1f} |"
     )
-    lines.append(
-        f"| Endpointing accuracy (mean) | {report.aggregate_endpointing_accuracy:.2%} |"
-    )
+    lines.append(f"| Endpointing accuracy (mean) | {report.aggregate_endpointing_accuracy:.2%} |")
     lines.append(f"| LLM decisiveness (mean) | {report.aggregate_llm_decisiveness:.2%} |")
     lines.append("")
     lines.append("## Per conversation")
@@ -298,9 +312,7 @@ def render_report(report: EvalReport) -> str:
         "| conv_id | topic | p95 ms | WER | faithfulness | "
         "barge-in | false-trigger | yield p95 | jitter | endpoint | decisive |"
     )
-    lines.append(
-        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
-    )
+    lines.append("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
     for s in report.per_conversation:
         lines.append(
             f"| {s.conv_id} | {s.topic} | "
@@ -311,6 +323,90 @@ def render_report(report: EvalReport) -> str:
             f"{s.llm_decisiveness:.2%} |"
         )
     return "\n".join(lines) + "\n"
+
+
+def render_report_html(report: EvalReport) -> str:
+    """HTML variant of `render_report` for browser-friendly viewing."""
+
+    def row(metric: str, value: str) -> str:
+        return f"    <tr><td>{metric}</td><td class='num'>{value}</td></tr>"
+
+    headline_rows = [
+        row("Conversations", str(report.n_conversations)),
+        row(
+            "Turn latency p50 / p95 / p99 (ms)",
+            (
+                f"{report.aggregate_turn_latency.p50_ms:.0f} / "
+                f"{report.aggregate_turn_latency.p95_ms:.0f} / "
+                f"{report.aggregate_turn_latency.p99_ms:.0f}"
+            ),
+        ),
+        row("Transcription WER (mean)", f"{report.aggregate_wer:.2%}"),
+        row("Response faithfulness (mean)", f"{report.aggregate_faithfulness:.2%}"),
+        row("Barge-in success (mean)", f"{report.aggregate_barge_in_success:.2%}"),
+        row("False-trigger rate (mean)", f"{report.aggregate_false_trigger_rate:.2%}"),
+        row("Barge-in yield p95 (ms)", f"{report.aggregate_barge_in_latency_p95_ms:.0f}"),
+        row("TTS first-byte jitter (ms)", f"{report.aggregate_tts_first_byte_jitter_ms:.1f}"),
+        row("Endpointing accuracy (mean)", f"{report.aggregate_endpointing_accuracy:.2%}"),
+        row("LLM decisiveness (mean)", f"{report.aggregate_llm_decisiveness:.2%}"),
+    ]
+    per_conv_rows = []
+    for s in report.per_conversation:
+        per_conv_rows.append(
+            "    <tr>"
+            f"<td>{s.conv_id}</td>"
+            f"<td>{s.topic}</td>"
+            f"<td class='num'>{s.turn_latency.p95_ms:.0f}</td>"
+            f"<td class='num'>{s.transcription_wer:.2%}</td>"
+            f"<td class='num'>{s.response_faithfulness:.2%}</td>"
+            f"<td class='num'>{s.barge_in_success_rate:.2%}</td>"
+            f"<td class='num'>{s.false_trigger_rate:.2%}</td>"
+            f"<td class='num'>{s.barge_in_latency_p95_ms:.0f}</td>"
+            f"<td class='num'>{s.tts_first_byte_jitter_ms:.1f}</td>"
+            f"<td class='num'>{s.endpointing_accuracy:.2%}</td>"
+            f"<td class='num'>{s.llm_decisiveness:.2%}</td>"
+            "</tr>"
+        )
+    headline_block = "\n".join(headline_rows)
+    per_conv_block = "\n".join(per_conv_rows)
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Voice eval report</title>
+<style>
+  body {{ font-family: -apple-system, system-ui, sans-serif; max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }}
+  table {{ border-collapse: collapse; width: 100%; margin-bottom: 2rem; }}
+  th, td {{ border: 1px solid #ddd; padding: 0.4rem 0.6rem; text-align: left; }}
+  th {{ background: #f5f5f5; }}
+  td.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
+  h1 {{ margin-bottom: 0.3rem; }}
+  h2 {{ margin-top: 2rem; }}
+</style>
+</head>
+<body>
+<h1>Voice eval report</h1>
+<h2>Headline</h2>
+<table>
+  <thead><tr><th>Metric</th><th>Value</th></tr></thead>
+  <tbody>
+{headline_block}
+  </tbody>
+</table>
+<h2>Per conversation</h2>
+<table>
+  <thead><tr>
+    <th>conv_id</th><th>topic</th><th>p95 ms</th><th>WER</th>
+    <th>faithfulness</th><th>barge-in</th><th>false-trigger</th>
+    <th>yield p95</th><th>jitter</th><th>endpoint</th><th>decisive</th>
+  </tr></thead>
+  <tbody>
+{per_conv_block}
+  </tbody>
+</table>
+</body>
+</html>
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -347,6 +443,7 @@ __all__ = [
     "false_trigger_rate",
     "llm_decisiveness",
     "render_report",
+    "render_report_html",
     "response_faithfulness",
     "score_conversation",
     "score_run",
