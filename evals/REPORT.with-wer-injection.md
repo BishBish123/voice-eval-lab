@@ -7,13 +7,13 @@
 | Conversations | 7 |
 | Turn latency p50 / p95 / p99 (ms) | 275 / 275 / 275 |
 | Transcription WER (corpus-pooled) | 3.19% |
-| Response faithfulness (pooled) | 61.54% |
-| Barge-in success (pooled) | 100.00% |
-| False-trigger rate (pooled) | 0.00% |
+| Response faithfulness (corpus-pooled) | 61.54% |
+| Barge-in success (corpus-pooled) | 100.00% |
+| False-trigger rate (corpus-pooled) | 0.00% |
 | Barge-in yield p95 (ms) | 100 |
 | TTS first-byte jitter (ms) | 0.0 |
-| Endpointing accuracy (pooled) | 100.00% |
-| LLM decisiveness (pooled) | 57.14% |
+| Endpointing accuracy (corpus-pooled) | 100.00% |
+| LLM decisiveness (corpus-pooled) | 57.14% |
 
 ## Per conversation
 

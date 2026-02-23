@@ -746,11 +746,11 @@ def render_report(report: EvalReport) -> str:
     )
     lines.append(f"| Transcription WER (corpus-pooled) | {report.aggregate_wer:.2%} |")
     faithfulness_cell = _pct_or_na(report.aggregate_faithfulness)
-    lines.append(f"| Response faithfulness (pooled) | {faithfulness_cell} |")
+    lines.append(f"| Response faithfulness (corpus-pooled) | {faithfulness_cell} |")
     barge_success_cell = _pct_or_na(report.aggregate_barge_in_success)
-    lines.append(f"| Barge-in success (pooled) | {barge_success_cell} |")
+    lines.append(f"| Barge-in success (corpus-pooled) | {barge_success_cell} |")
     false_trigger_cell = _pct_or_na(report.aggregate_false_trigger_rate)
-    lines.append(f"| False-trigger rate (pooled) | {false_trigger_cell} |")
+    lines.append(f"| False-trigger rate (corpus-pooled) | {false_trigger_cell} |")
     barge_p95_cell = (
         "n/a"
         if report.aggregate_barge_in_latency_p95_ms is None
@@ -764,9 +764,9 @@ def render_report(report: EvalReport) -> str:
     )
     lines.append(f"| TTS first-byte jitter (ms) | {jitter_cell} |")
     endpoint_cell = _pct_or_na(report.aggregate_endpointing_accuracy)
-    lines.append(f"| Endpointing accuracy (pooled) | {endpoint_cell} |")
+    lines.append(f"| Endpointing accuracy (corpus-pooled) | {endpoint_cell} |")
     decisiveness_cell = _pct_or_na(report.aggregate_llm_decisiveness)
-    lines.append(f"| LLM decisiveness (pooled) | {decisiveness_cell} |")
+    lines.append(f"| LLM decisiveness (corpus-pooled) | {decisiveness_cell} |")
     lines.append("")
     lines.append("## Per conversation")
     lines.append("")
@@ -842,9 +842,18 @@ def render_report_html(report: EvalReport) -> str:
             ),
         ),
         row("Transcription WER (corpus-pooled)", f"{report.aggregate_wer:.2%}"),
-        row("Response faithfulness (pooled)", _pct_or_na(report.aggregate_faithfulness)),
-        row("Barge-in success (pooled)", _pct_or_na(report.aggregate_barge_in_success)),
-        row("False-trigger rate (pooled)", _pct_or_na(report.aggregate_false_trigger_rate)),
+        row(
+            "Response faithfulness (corpus-pooled)",
+            _pct_or_na(report.aggregate_faithfulness),
+        ),
+        row(
+            "Barge-in success (corpus-pooled)",
+            _pct_or_na(report.aggregate_barge_in_success),
+        ),
+        row(
+            "False-trigger rate (corpus-pooled)",
+            _pct_or_na(report.aggregate_false_trigger_rate),
+        ),
         row(
             "Barge-in yield p95 (ms)",
             "n/a"
@@ -857,8 +866,14 @@ def render_report_html(report: EvalReport) -> str:
             if report.aggregate_tts_first_byte_jitter_ms is None
             else f"{report.aggregate_tts_first_byte_jitter_ms:.1f}",
         ),
-        row("Endpointing accuracy (pooled)", _pct_or_na(report.aggregate_endpointing_accuracy)),
-        row("LLM decisiveness (pooled)", _pct_or_na(report.aggregate_llm_decisiveness)),
+        row(
+            "Endpointing accuracy (corpus-pooled)",
+            _pct_or_na(report.aggregate_endpointing_accuracy),
+        ),
+        row(
+            "LLM decisiveness (corpus-pooled)",
+            _pct_or_na(report.aggregate_llm_decisiveness),
+        ),
     ]
     per_conv_rows = []
     for s in report.per_conversation:
