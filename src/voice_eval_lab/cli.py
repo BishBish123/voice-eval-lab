@@ -1,20 +1,41 @@
 """`voice-eval` CLI: run the harness over the bundled golden set + emit reports.
 
-(The `eval` package this CLI lives next to is the metrics module — no
-calls to Python's builtin `eval()` anywhere in this file.)
+Subcommands:
+
+- `run`       — score the bundled mock pipeline and write a markdown / JSON report
+- `list`      — enumerate the bundled golden conversations
+- `baseline`  — run the eval and persist the headline scores as a baseline file
+- `compare`   — diff a fresh run against a baseline, exit non-zero on regression
+- `render`    — re-render an existing scores.json into markdown or HTML
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.table import Table
 
+from voice_eval_lab.baseline import (
+    RegressionThresholds,
+    read_baseline,
+    render_diffs,
+    write_baseline,
+)
+from voice_eval_lab.baseline import (
+    compare as compare_reports,
+)
 from voice_eval_lab.eval.golden import default_golden_set
-from voice_eval_lab.eval.metrics import render_report, score_run
+from voice_eval_lab.eval.metrics import (
+    EvalReport,
+    render_report,
+    render_report_html,
+    score_run,
+)
 from voice_eval_lab.pipeline import MockLLM, MockSTT, MockTTS, VoicePipeline
 
 app = typer.Typer(
@@ -24,6 +45,35 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _run_eval(
+    *,
+    wer_substitution_rate: float = 0.0,
+    false_trigger_rate: float = 0.0,
+) -> EvalReport:
+    async def _go() -> EvalReport:
+        pipeline = VoicePipeline(
+            stt=MockSTT(wer_substitution_rate=wer_substitution_rate),
+            llm=MockLLM(),
+            tts=MockTTS(),
+            false_trigger_rate=false_trigger_rate,
+        )
+        conversations = default_golden_set()
+        runs = [await pipeline.run(c) for c in conversations]
+        return score_run(list(zip(conversations, runs, strict=True)))
+
+    return asyncio.run(_go())
+
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
 
 
 @app.command()
@@ -38,25 +88,106 @@ def run(
     ),
 ) -> None:
     """Score the bundled mock pipeline over the bundled golden set."""
+    report = _run_eval(
+        wer_substitution_rate=wer_substitution_rate,
+        false_trigger_rate=false_trigger_rate,
+    )
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(render_report(report))
+    console.print(f"[green]wrote[/] {out}")
+    if json_out is not None:
+        json_out.parent.mkdir(parents=True, exist_ok=True)
+        json_out.write_text(json.dumps(report.model_dump(), indent=2))
+        console.print(f"[green]wrote[/] {json_out}")
+    # Echo the headline.
+    console.print(render_report(report).split("## Per conversation")[0])
 
-    async def _go() -> None:
-        pipeline = VoicePipeline(
-            stt=MockSTT(wer_substitution_rate=wer_substitution_rate),
-            llm=MockLLM(),
-            tts=MockTTS(),
-            false_trigger_rate=false_trigger_rate,
+
+@app.command("list")
+def list_cmd() -> None:
+    """List the bundled golden conversations."""
+    table = Table(title="Bundled golden set")
+    table.add_column("conv_id")
+    table.add_column("topic")
+    table.add_column("user turns", justify="right")
+    table.add_column("interrupted", justify="right")
+    table.add_column("gold facts", justify="right")
+    for conv in default_golden_set():
+        n_user = sum(1 for t in conv.turns if t.role.value == "user")
+        n_int = sum(1 for t in conv.turns if t.interrupted)
+        table.add_row(
+            conv.conv_id,
+            conv.topic,
+            str(n_user),
+            str(n_int),
+            str(len(conv.gold_facts)),
         )
-        conversations = default_golden_set()
-        runs = [await pipeline.run(c) for c in conversations]
-        report = score_run(list(zip(conversations, runs, strict=True)))
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(render_report(report))
-        console.print(f"[green]wrote[/] {out}")
-        if json_out is not None:
-            json_out.parent.mkdir(parents=True, exist_ok=True)
-            json_out.write_text(json.dumps(report.model_dump(), indent=2))
-            console.print(f"[green]wrote[/] {json_out}")
-        # Echo the headline.
-        console.print(render_report(report).split("## Per conversation")[0])
+    console.print(table)
 
-    asyncio.run(_go())
+
+@app.command()
+def baseline(
+    save: Path = typer.Option(..., "--save", help="JSON file to write the baseline to."),
+    wer_substitution_rate: float = typer.Option(0.0),
+    false_trigger_rate: float = typer.Option(0.0),
+) -> None:
+    """Run the eval and persist the headline scores as a baseline."""
+    report = _run_eval(
+        wer_substitution_rate=wer_substitution_rate,
+        false_trigger_rate=false_trigger_rate,
+    )
+    write_baseline(report, save)
+    console.print(f"[green]wrote baseline[/] {save}")
+
+
+@app.command()
+def compare(
+    baseline_path: Path = typer.Option(
+        ..., "--baseline", help="Baseline JSON file to diff against."
+    ),
+    wer_substitution_rate: float = typer.Option(0.0),
+    false_trigger_rate: float = typer.Option(0.0),
+    latency_threshold_ms: float = typer.Option(10.0, help="Allowed p95 latency increase (ms)."),
+    wer_threshold: float = typer.Option(0.02, help="Allowed WER increase (fraction)."),
+    faithfulness_threshold: float = typer.Option(
+        0.05, help="Allowed faithfulness drop (fraction)."
+    ),
+) -> None:
+    """Diff a fresh run against a baseline; exit non-zero if any metric regressed."""
+    base = read_baseline(baseline_path)
+    current = _run_eval(
+        wer_substitution_rate=wer_substitution_rate,
+        false_trigger_rate=false_trigger_rate,
+    )
+    thresholds = RegressionThresholds(
+        latency_p95_ms=latency_threshold_ms,
+        wer=wer_threshold,
+        faithfulness=faithfulness_threshold,
+    )
+    diffs = compare_reports(base, current, thresholds)
+    console.print(render_diffs(diffs))
+    if any(d.regressed for d in diffs):
+        console.print("[red]regression detected[/]")
+        sys.exit(1)
+    console.print("[green]no regressions[/]")
+
+
+@app.command()
+def render(
+    json_path: Path = typer.Option(
+        Path("evals/scores.json"), "--from", help="Source JSON scores file."
+    ),
+    out: Path = typer.Option(Path("evals/REPORT.md"), help="Output report path."),
+    fmt: str = typer.Option("markdown", "--format", help="One of: markdown, html."),
+) -> None:
+    """Re-render an existing scores.json into markdown or HTML."""
+    report = EvalReport.model_validate(json.loads(json_path.read_text()))
+    if fmt == "markdown":
+        body = render_report(report)
+    elif fmt == "html":
+        body = render_report_html(report)
+    else:
+        raise typer.BadParameter(f"unknown format: {fmt!r}")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(body)
+    console.print(f"[green]wrote[/] {out}")
