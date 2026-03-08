@@ -266,8 +266,12 @@ def run(
     if json_out is not None:
         _safe_write_text(json_out, json.dumps(report.model_dump(), indent=2))
         console.print(f"[green]wrote[/] {json_out}")
-    # Echo the headline.
+    # Echo the headline only — the per-conversation table is intentionally
+    # truncated from stdout so a corpus run doesn't flood the terminal.
+    # Tell the reader where to find the full table so the truncation is
+    # discoverable without reading the source.
     console.print(render_report(report).split("## Per conversation")[0])
+    console.print(f"[dim](full per-conversation table in {out})[/]")
 
 
 @app.command("list")
