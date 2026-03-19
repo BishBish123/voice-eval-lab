@@ -50,6 +50,27 @@ class TestWEREdges:
         run = make_run([make_turn_run(transcribed=text)])
         assert transcription_wer(conv, run) == 0.0
 
+    def test_whitespace_only_hypothesis_is_full_wer(self) -> None:
+        # A pipeline that emits only whitespace ("   ") should not be
+        # rewarded — the reference has two real words, so WER is 1.0.
+        conv = make_conv([make_user("hello world")])
+        run = make_run([make_turn_run(transcribed="   ", reply="x")])
+        assert transcription_wer(conv, run) == pytest.approx(1.0)
+
+    def test_punctuation_only_hypothesis_is_full_wer(self) -> None:
+        # jiwer tokenizes by whitespace; "..." is one non-matching token,
+        # so a two-word reference still yields WER 1.0 (not partial credit).
+        conv = make_conv([make_user("hello world")])
+        run = make_run([make_turn_run(transcribed="...", reply="x")])
+        assert transcription_wer(conv, run) == pytest.approx(1.0)
+
+    def test_hypothesis_longer_than_reference_inserts(self) -> None:
+        # Insertions count: ref="hello" (1 word), hyp="hello there friend"
+        # (3 words) -> 2 insertions / 1 ref word = 2.0 WER.
+        conv = make_conv([make_user("hello")])
+        run = make_run([make_turn_run(transcribed="hello there friend")])
+        assert transcription_wer(conv, run) == pytest.approx(2.0)
+
     def test_no_user_turns_returns_zero(self) -> None:
         conv = make_conv([])
         run = ConversationRun(conv_id="c", topic="t", user_turns_played=0, turn_runs=[])
