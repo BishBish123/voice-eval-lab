@@ -1,15 +1,19 @@
 {
-  "n_conversations": 4,
+  "n_conversations": 7,
   "aggregate_turn_latency": {
     "p50_ms": 275.0,
     "p95_ms": 275.0,
     "p99_ms": 275.0,
-    "n": 6
+    "n": 15
   },
-  "aggregate_wer": 0.03835227272727273,
-  "aggregate_faithfulness": 0.75,
+  "aggregate_wer": 0.02812676453980802,
+  "aggregate_faithfulness": 0.7142857142857143,
   "aggregate_barge_in_success": 1.0,
   "aggregate_false_trigger_rate": 0.0,
+  "aggregate_barge_in_latency_p95_ms": 28.571428571428573,
+  "aggregate_tts_first_byte_jitter_ms": 0.0,
+  "aggregate_endpointing_accuracy": 1.0,
+  "aggregate_llm_decisiveness": 0.5714285714285714,
   "per_conversation": [
     {
       "conv_id": "postgres-replication",
@@ -23,7 +27,11 @@
       "transcription_wer": 0.0625,
       "response_faithfulness": 1.0,
       "barge_in_success_rate": 1.0,
-      "false_trigger_rate": 0.0
+      "false_trigger_rate": 0.0,
+      "barge_in_latency_p95_ms": 0.0,
+      "tts_first_byte_jitter_ms": 0.0,
+      "endpointing_accuracy": 1.0,
+      "llm_decisiveness": 1.0
     },
     {
       "conv_id": "hnsw-tuning",
@@ -37,7 +45,11 @@
       "transcription_wer": 0.0,
       "response_faithfulness": 0.0,
       "barge_in_success_rate": 1.0,
-      "false_trigger_rate": 0.0
+      "false_trigger_rate": 0.0,
+      "barge_in_latency_p95_ms": 100.0,
+      "tts_first_byte_jitter_ms": 0.0,
+      "endpointing_accuracy": 1.0,
+      "llm_decisiveness": 0.0
     },
     {
       "conv_id": "prom-burn-rate",
@@ -51,7 +63,11 @@
       "transcription_wer": 0.09090909090909091,
       "response_faithfulness": 1.0,
       "barge_in_success_rate": 1.0,
-      "false_trigger_rate": 0.0
+      "false_trigger_rate": 0.0,
+      "barge_in_latency_p95_ms": 0.0,
+      "tts_first_byte_jitter_ms": 0.0,
+      "endpointing_accuracy": 1.0,
+      "llm_decisiveness": 1.0
     },
     {
       "conv_id": "empty-noise",
@@ -65,7 +81,65 @@
       "transcription_wer": 0.0,
       "response_faithfulness": 1.0,
       "barge_in_success_rate": 1.0,
-      "false_trigger_rate": 0.0
+      "false_trigger_rate": 0.0,
+      "barge_in_latency_p95_ms": 0.0,
+      "tts_first_byte_jitter_ms": 0.0,
+      "endpointing_accuracy": 1.0,
+      "llm_decisiveness": 0.0
+    },
+    {
+      "conv_id": "agent-led-debug",
+      "topic": "Agent-led debugging session",
+      "turn_latency": {
+        "p50_ms": 275.0,
+        "p95_ms": 275.0,
+        "p99_ms": 275.0,
+        "n": 3
+      },
+      "transcription_wer": 0.043478260869565216,
+      "response_faithfulness": 0.6666666666666666,
+      "barge_in_success_rate": 1.0,
+      "false_trigger_rate": 0.0,
+      "barge_in_latency_p95_ms": 0.0,
+      "tts_first_byte_jitter_ms": 0.0,
+      "endpointing_accuracy": 1.0,
+      "llm_decisiveness": 0.6666666666666666
+    },
+    {
+      "conv_id": "noisy-vad",
+      "topic": "Noisy VAD endpointing",
+      "turn_latency": {
+        "p50_ms": 275.0,
+        "p95_ms": 275.0,
+        "p99_ms": 275.0,
+        "n": 3
+      },
+      "transcription_wer": 0.0,
+      "response_faithfulness": 0.3333333333333333,
+      "barge_in_success_rate": 1.0,
+      "false_trigger_rate": 0.0,
+      "barge_in_latency_p95_ms": 0.0,
+      "tts_first_byte_jitter_ms": 0.0,
+      "endpointing_accuracy": 1.0,
+      "llm_decisiveness": 0.3333333333333333
+    },
+    {
+      "conv_id": "double-barge",
+      "topic": "Two consecutive barge-ins",
+      "turn_latency": {
+        "p50_ms": 275.0,
+        "p95_ms": 275.0,
+        "p99_ms": 275.0,
+        "n": 3
+      },
+      "transcription_wer": 0.0,
+      "response_faithfulness": 1.0,
+      "barge_in_success_rate": 1.0,
+      "false_trigger_rate": 0.0,
+      "barge_in_latency_p95_ms": 100.0,
+      "tts_first_byte_jitter_ms": 0.0,
+      "endpointing_accuracy": 1.0,
+      "llm_decisiveness": 1.0
     }
   ]
 }
