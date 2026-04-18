@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+import pytest
+
 from voice_eval_lab.baseline import (
+    CURRENT_SCHEMA_VERSION,
+    BaselineSchemaError,
     RegressionThresholds,
     compare,
     read_baseline,
@@ -50,6 +55,60 @@ class TestRoundTrip:
         path = tmp_path / "nested" / "deep" / "baseline.json"
         write_baseline(report, path)
         assert path.exists()
+
+    def test_write_baseline_tags_schema_version(self, tmp_path: Path) -> None:
+        report = _report()
+        path = tmp_path / "baseline.json"
+        write_baseline(report, path)
+        raw = json.loads(path.read_text())
+        assert raw["schema_version"] == CURRENT_SCHEMA_VERSION
+        assert "report" in raw
+        assert "saved_at" in raw
+
+
+# ---------------------------------------------------------------------------
+# read_baseline strictness — stale files must NOT be silently re-defaulted
+# ---------------------------------------------------------------------------
+
+
+class TestReadBaselineStrict:
+    def test_read_baseline_rejects_v0_blob(self, tmp_path: Path) -> None:
+        # Pre-versioning shape: bare EvalReport dump, no wrapper.
+        path = tmp_path / "baseline.json"
+        path.write_text(json.dumps(_report().model_dump()))
+        with pytest.raises(BaselineSchemaError, match="schema_version"):
+            read_baseline(path)
+
+    def test_read_baseline_rejects_unknown_version(self, tmp_path: Path) -> None:
+        path = tmp_path / "baseline.json"
+        path.write_text(
+            json.dumps({"schema_version": 999, "report": _report().model_dump()})
+        )
+        with pytest.raises(BaselineSchemaError, match="999"):
+            read_baseline(path)
+
+    def test_read_baseline_rejects_missing_field(self, tmp_path: Path) -> None:
+        # Drop a v0.2 metric the current schema requires.
+        report_blob = _report().model_dump()
+        del report_blob["aggregate_tts_first_byte_jitter_ms"]
+        path = tmp_path / "baseline.json"
+        path.write_text(
+            json.dumps({"schema_version": CURRENT_SCHEMA_VERSION, "report": report_blob})
+        )
+        with pytest.raises(BaselineSchemaError, match="aggregate_tts_first_byte_jitter_ms"):
+            read_baseline(path)
+
+    def test_read_baseline_rejects_missing_report(self, tmp_path: Path) -> None:
+        path = tmp_path / "baseline.json"
+        path.write_text(json.dumps({"schema_version": CURRENT_SCHEMA_VERSION}))
+        with pytest.raises(BaselineSchemaError, match="report"):
+            read_baseline(path)
+
+    def test_read_baseline_rejects_non_object(self, tmp_path: Path) -> None:
+        path = tmp_path / "baseline.json"
+        path.write_text(json.dumps([1, 2, 3]))
+        with pytest.raises(BaselineSchemaError):
+            read_baseline(path)
 
 
 # ---------------------------------------------------------------------------

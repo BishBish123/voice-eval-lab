@@ -11,15 +11,33 @@ serialised to JSON. The compare flow:
 Thresholds reflect the directionality of each metric: WER, jitter,
 false-trigger, latency are "lower is better"; faithfulness, barge-in,
 endpointing, decisiveness are "higher is better".
+
+Schema versioning
+-----------------
+
+The on-disk file is wrapped with an explicit `schema_version` so a stale
+baseline (written before a metric was added) cannot silently inherit
+schema defaults — Pydantic would happily fill `aggregate_jitter_ms=0.0`
+for a v0.1 file and produce false comparisons. `read_baseline` rejects
+files whose version is missing/mismatched, or whose payload is missing
+any field the current `EvalReport` schema declares.
 """
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from voice_eval_lab.models import EvalReport
+
+CURRENT_SCHEMA_VERSION = 1
+
+
+class BaselineSchemaError(ValueError):
+    """Raised when a baseline file is missing/wrong schema version or fields."""
 
 
 @dataclass
@@ -51,13 +69,60 @@ class MetricDiff:
     regressed: bool
 
 
+def _expected_report_fields() -> set[str]:
+    """Field names the current EvalReport schema declares."""
+    return set(EvalReport.model_fields.keys())
+
+
 def write_baseline(report: EvalReport, path: Path) -> None:
+    """Persist `report` wrapped with the current schema version + timestamp."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(report.model_dump(), indent=2))
+    payload = {
+        "schema_version": CURRENT_SCHEMA_VERSION,
+        "saved_at": datetime.now(UTC).isoformat(),
+        "report": report.model_dump(),
+    }
+    path.write_text(json.dumps(payload, indent=2))
 
 
 def read_baseline(path: Path) -> EvalReport:
-    return EvalReport.model_validate(json.loads(path.read_text()))
+    """Load a versioned baseline file.
+
+    Raises `BaselineSchemaError` if the file is missing the wrapper, has
+    a mismatched schema version, or is missing any expected EvalReport
+    field. The strict shape stops an old baseline from quietly producing
+    Pydantic-default values for metrics that didn't exist when it was
+    written.
+    """
+    raw: Any = json.loads(path.read_text())
+    if not isinstance(raw, dict):
+        raise BaselineSchemaError(
+            f"baseline at {path} is not a JSON object (got {type(raw).__name__})"
+        )
+    if "schema_version" not in raw:
+        raise BaselineSchemaError(
+            f"baseline at {path} is missing 'schema_version' "
+            "(written by an older voice-eval-lab — re-run `voice-eval baseline --save`)"
+        )
+    version = raw["schema_version"]
+    if version != CURRENT_SCHEMA_VERSION:
+        raise BaselineSchemaError(
+            f"baseline at {path} has schema_version={version!r}, "
+            f"expected {CURRENT_SCHEMA_VERSION} — re-run `voice-eval baseline --save`"
+        )
+    if "report" not in raw or not isinstance(raw["report"], dict):
+        raise BaselineSchemaError(
+            f"baseline at {path} is missing the 'report' object"
+        )
+    report_blob = raw["report"]
+    expected = _expected_report_fields()
+    missing = expected - set(report_blob.keys())
+    if missing:
+        raise BaselineSchemaError(
+            f"baseline at {path} is missing required fields: {sorted(missing)} — "
+            "re-run `voice-eval baseline --save` against current code"
+        )
+    return EvalReport.model_validate(report_blob)
 
 
 def compare(
@@ -157,6 +222,8 @@ def render_diffs(diffs: list[MetricDiff]) -> str:
 
 
 __all__ = [
+    "CURRENT_SCHEMA_VERSION",
+    "BaselineSchemaError",
     "MetricDiff",
     "RegressionThresholds",
     "compare",

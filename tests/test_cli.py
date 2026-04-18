@@ -64,7 +64,9 @@ class TestBaselineCommand:
         assert result.exit_code == 0, result.output
         assert baseline.exists()
         data = json.loads(baseline.read_text())
-        assert "aggregate_turn_latency" in data
+        # Versioned wrapper: schema_version + saved_at + report blob.
+        assert data["schema_version"] >= 1
+        assert "aggregate_turn_latency" in data["report"]
 
 
 class TestCompareCommand:
@@ -97,35 +99,39 @@ class TestCompareCommand:
 
 
 class TestRenderCommand:
+    def _produce_scores(self, tmp_path: Path) -> Path:
+        # `render` consumes the unwrapped scores.json that `run --json` emits,
+        # not the versioned baseline wrapper.
+        scores = tmp_path / "scores.json"
+        runner.invoke(app, ["run", "--out", str(tmp_path / "REPORT.md"), "--json", str(scores)])
+        return scores
+
     def test_render_markdown_from_json(self, tmp_path: Path) -> None:
-        baseline = tmp_path / "scores.json"
-        runner.invoke(app, ["baseline", "--save", str(baseline)])
+        scores = self._produce_scores(tmp_path)
         out = tmp_path / "REPORT.md"
         result = runner.invoke(
             app,
-            ["render", "--from", str(baseline), "--out", str(out), "--format", "markdown"],
+            ["render", "--from", str(scores), "--out", str(out), "--format", "markdown"],
         )
         assert result.exit_code == 0, result.output
         assert out.exists()
         assert out.read_text().startswith("# Voice eval report")
 
     def test_render_html_from_json(self, tmp_path: Path) -> None:
-        baseline = tmp_path / "scores.json"
-        runner.invoke(app, ["baseline", "--save", str(baseline)])
+        scores = self._produce_scores(tmp_path)
         out = tmp_path / "REPORT.html"
         result = runner.invoke(
             app,
-            ["render", "--from", str(baseline), "--out", str(out), "--format", "html"],
+            ["render", "--from", str(scores), "--out", str(out), "--format", "html"],
         )
         assert result.exit_code == 0, result.output
         assert out.exists()
         assert out.read_text().startswith("<!doctype html>")
 
     def test_render_unknown_format_errors(self, tmp_path: Path) -> None:
-        baseline = tmp_path / "scores.json"
-        runner.invoke(app, ["baseline", "--save", str(baseline)])
+        scores = self._produce_scores(tmp_path)
         result = runner.invoke(
             app,
-            ["render", "--from", str(baseline), "--out", str(tmp_path / "x"), "--format", "yaml"],
+            ["render", "--from", str(scores), "--out", str(tmp_path / "x"), "--format", "yaml"],
         )
         assert result.exit_code != 0
