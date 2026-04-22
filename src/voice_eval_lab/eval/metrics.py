@@ -100,12 +100,23 @@ def response_faithfulness(conversation: Conversation, run: ConversationRun) -> f
     return score / n if n else 0.0
 
 
-def barge_in_success_rate(conversation: Conversation, run: ConversationRun) -> float:
-    """Fraction of user-interrupted turns the pipeline yielded inside the budget.
+DEFAULT_BARGE_IN_BUDGET_MS = 200
 
-    With the deterministic mock pipeline this is 1.0 when an interrupted
-    user turn has a tts_first_byte span; the test fixture exercises the
-    failure path by withholding the yield span.
+
+def barge_in_success_rate(
+    conversation: Conversation,
+    run: ConversationRun,
+    barge_in_budget_ms: int = DEFAULT_BARGE_IN_BUDGET_MS,
+) -> float:
+    """Fraction of user-interrupted turns the pipeline yielded inside `barge_in_budget_ms`.
+
+    A turn is "successful" iff it has a `barge_in.yield` span AND that
+    span's duration is <= `barge_in_budget_ms`. The presence of a
+    `tts_first_byte` span is *not* sufficient — the agent reaching TTS
+    at all says nothing about whether it cut off the previous reply when
+    the user barged in.
+
+    Returns 1.0 when there are no interrupted user turns (vacuously true).
     """
     user_turns = [t for t in conversation.turns if t.role is TurnRole.USER]
     interruptible = [t for t in user_turns if t.interrupted]
@@ -113,12 +124,14 @@ def barge_in_success_rate(conversation: Conversation, run: ConversationRun) -> f
         return 1.0
     yielded = 0
     for ut in interruptible:
-        # Find the matching turn run by index.
         idx = user_turns.index(ut)
         if idx >= len(run.turn_runs):
             continue
         tr = run.turn_runs[idx]
-        if any(s.name == "tts_first_byte" for s in tr.spans):
+        yield_span = _find_span(tr.spans, "barge_in.yield")
+        if yield_span is None:
+            continue
+        if (yield_span.ended_at_ms - yield_span.started_at_ms) <= barge_in_budget_ms:
             yielded += 1
     return yielded / len(interruptible)
 

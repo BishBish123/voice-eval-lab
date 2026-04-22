@@ -148,12 +148,32 @@ class TestBargeIn:
 
     def test_interrupted_turn_yielded(self) -> None:
         conv = _conv([_user("interrupted", interrupted=True)])
-        run = _run([_turn_run(transcribed="x", reply="ok", vad_end_ms=0, first_byte_ms=10)])
+        # An interrupted turn is "successful" iff a barge_in.yield span exists
+        # within budget. tts_first_byte alone is not enough.
+        run = ConversationRun(
+            conv_id="c",
+            topic="t",
+            user_turns_played=1,
+            turn_runs=[
+                TurnRun(
+                    user_turn_index=0,
+                    transcribed_text="x",
+                    agent_reply="ok",
+                    interrupted=True,
+                    spans=[
+                        PipelineSpan(name="vad_end", started_at_ms=0, ended_at_ms=0),
+                        PipelineSpan(name="tts_first_byte", started_at_ms=10, ended_at_ms=10),
+                        PipelineSpan(name="barge_in.yield", started_at_ms=0, ended_at_ms=80),
+                    ],
+                )
+            ],
+        )
         assert barge_in_success_rate(conv, run) == 1.0
 
     def test_interrupted_turn_no_yield_span(self) -> None:
         conv = _conv([_user("interrupted", interrupted=True)])
-        # turn run with no tts_first_byte span — pipeline never yielded
+        # turn run with no barge_in.yield span — pipeline never yielded.
+        # tts_first_byte being present is irrelevant for barge-in success.
         run = ConversationRun(
             conv_id="c",
             topic="t",
@@ -164,11 +184,99 @@ class TestBargeIn:
                     transcribed_text="x",
                     agent_reply="...",
                     interrupted=True,
-                    spans=[],  # no first_byte
+                    spans=[
+                        PipelineSpan(name="tts_first_byte", started_at_ms=10, ended_at_ms=10),
+                    ],  # no barge_in.yield
                 )
             ],
         )
         assert barge_in_success_rate(conv, run) == 0.0
+
+    def test_no_yield_span_fails_barge_in(self) -> None:
+        # Interrupted turn that has tts_first_byte but no barge_in.yield —
+        # the agent reached TTS but never actually yielded to the user.
+        conv = _conv([_user("interrupted", interrupted=True)])
+        run = ConversationRun(
+            conv_id="c",
+            topic="t",
+            user_turns_played=1,
+            turn_runs=[
+                TurnRun(
+                    user_turn_index=0,
+                    transcribed_text="x",
+                    agent_reply="ok",
+                    interrupted=True,
+                    spans=[
+                        PipelineSpan(name="vad_end", started_at_ms=0, ended_at_ms=0),
+                        PipelineSpan(name="tts_first_byte", started_at_ms=10, ended_at_ms=10),
+                    ],
+                )
+            ],
+        )
+        assert barge_in_success_rate(conv, run) == 0.0
+
+    def test_over_budget_yield_fails(self) -> None:
+        # yield span exists but blows the default 200ms budget.
+        conv = _conv([_user("interrupted", interrupted=True)])
+        run = ConversationRun(
+            conv_id="c",
+            topic="t",
+            user_turns_played=1,
+            turn_runs=[
+                TurnRun(
+                    user_turn_index=0,
+                    transcribed_text="x",
+                    agent_reply="ok",
+                    interrupted=True,
+                    spans=[
+                        PipelineSpan(name="barge_in.yield", started_at_ms=0, ended_at_ms=350),
+                    ],
+                )
+            ],
+        )
+        assert barge_in_success_rate(conv, run) == 0.0
+
+    def test_under_budget_yield_succeeds(self) -> None:
+        conv = _conv([_user("interrupted", interrupted=True)])
+        run = ConversationRun(
+            conv_id="c",
+            topic="t",
+            user_turns_played=1,
+            turn_runs=[
+                TurnRun(
+                    user_turn_index=0,
+                    transcribed_text="x",
+                    agent_reply="ok",
+                    interrupted=True,
+                    spans=[
+                        PipelineSpan(name="barge_in.yield", started_at_ms=0, ended_at_ms=120),
+                    ],
+                )
+            ],
+        )
+        assert barge_in_success_rate(conv, run) == 1.0
+
+    def test_custom_budget(self) -> None:
+        # 250ms yield: passes a 300ms budget, fails a 100ms budget.
+        conv = _conv([_user("interrupted", interrupted=True)])
+        run = ConversationRun(
+            conv_id="c",
+            topic="t",
+            user_turns_played=1,
+            turn_runs=[
+                TurnRun(
+                    user_turn_index=0,
+                    transcribed_text="x",
+                    agent_reply="ok",
+                    interrupted=True,
+                    spans=[
+                        PipelineSpan(name="barge_in.yield", started_at_ms=0, ended_at_ms=250),
+                    ],
+                )
+            ],
+        )
+        assert barge_in_success_rate(conv, run, barge_in_budget_ms=300) == 1.0
+        assert barge_in_success_rate(conv, run, barge_in_budget_ms=100) == 0.0
 
 
 # ---------------------------------------------------------------------------

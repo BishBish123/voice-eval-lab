@@ -149,11 +149,22 @@ class TestScoreRunEdges:
             ],
             gold=["x"],
         )
+        # barge_in.yield spans within the 200ms default budget so the metric
+        # actually counts the turns as successful.
         run = make_run(
             [
-                make_turn_run(interrupted=True, vad_end_ms=1000, first_byte_ms=1100),
                 make_turn_run(
-                    interrupted=True, vad_end_ms=2000, first_byte_ms=2100, user_turn_index=1
+                    interrupted=True,
+                    vad_end_ms=1000,
+                    first_byte_ms=1100,
+                    barge_yield_ms=80,
+                ),
+                make_turn_run(
+                    interrupted=True,
+                    vad_end_ms=2000,
+                    first_byte_ms=2100,
+                    barge_yield_ms=80,
+                    user_turn_index=1,
                 ),
             ]
         )
