@@ -627,7 +627,12 @@ class TestAggregatePooledRatios:
         # user-turn count across the run, not len(turn_runs).
         conv_short = make_conv([make_user("u1")], conv_id="short")
         run_short = make_run(
-            [make_turn_run(false_trigger=True)],
+            [
+                # Real reply for user_turn 0 + an injected false trigger,
+                # mirroring the pipeline's interleaving so coverage holds.
+                make_turn_run(user_turn_index=0),
+                make_turn_run(false_trigger=True, user_turn_index=0),
+            ],
             conv_id="short",
         )
         long_user_turns = [

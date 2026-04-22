@@ -8,6 +8,7 @@ import pytest
 from tests.conftest import make_conv, make_run, make_turn_run, make_user
 from voice_eval_lab.eval.metrics import (
     _percentile_stats,
+    llm_decisiveness,
     response_faithfulness,
     score_run,
     transcription_wer,
@@ -195,10 +196,16 @@ class TestScoreRunEdges:
         assert report.aggregate_wer == 0.0
 
     def test_all_false_trigger(self) -> None:
+        # Each user turn covered by a real TurnRun + an injected false-trigger
+        # alongside it (mirroring how the pipeline appends synthetics after
+        # each real turn). The rate is `false_trigger_turns / user_turns`,
+        # so 2 synthetics over 2 user turns = 100%.
         conv = make_conv([make_user("u1"), make_user("u2")], gold=[])
         run = make_run(
             [
-                make_turn_run(false_trigger=True),
+                make_turn_run(user_turn_index=0),
+                make_turn_run(false_trigger=True, user_turn_index=0),
+                make_turn_run(user_turn_index=1),
                 make_turn_run(false_trigger=True, user_turn_index=1),
             ]
         )
@@ -226,6 +233,80 @@ class TestFalseTriggerExclusion:
             ]
         )
         assert response_faithfulness(conv, without) == response_faithfulness(conv, with_ft)
+
+    def test_false_trigger_between_real_turns_preserves_alignment(self) -> None:
+        # Regression test for the user-turn alignment bug: the pipeline
+        # interleaves synthetic false-trigger TurnRuns between real ones
+        # (`pipeline.py` appends after the real turn it follows).  A naive
+        # `zip(user_turns, run.turn_runs)` shifts every later user turn
+        # onto the wrong TurnRun, so WER / faithfulness / endpointing /
+        # decisiveness all read the wrong cell.
+        #
+        # Layout: 3 user turns ("apple", "banana", "cherry").  The real
+        # turn for user-turn 0 is followed by a synthetic false-trigger,
+        # then the real turns for user-turns 1 and 2.  Each real
+        # transcribed_text matches the user_turn exactly, so a correctly
+        # aligned WER is 0%.  Pre-fix, the misalignment maps user_turn 1
+        # onto the empty false-trigger TurnRun -> non-zero WER.
+        conv = make_conv(
+            [
+                make_user("apple", start=0, end=1000),
+                make_user("banana", start=1500, end=2500),
+                make_user("cherry", start=3000, end=4000),
+            ],
+            gold=["apple", "banana", "cherry"],
+        )
+        run = make_run(
+            [
+                make_turn_run(
+                    transcribed="apple",
+                    reply="apple is the answer",
+                    vad_end_ms=1000,
+                    first_byte_ms=1100,
+                    user_turn_index=0,
+                ),
+                # Synthetic false-trigger appended right after the first
+                # real turn — this is what `VoicePipeline.run` does when
+                # the per-turn Bernoulli draw fires.
+                TurnRun(
+                    user_turn_index=0,
+                    transcribed_text="",
+                    agent_reply="...?",
+                    interrupted=False,
+                    false_trigger=True,
+                    spans=[],
+                ),
+                make_turn_run(
+                    transcribed="banana",
+                    reply="banana is correct",
+                    vad_end_ms=2500,
+                    first_byte_ms=2600,
+                    user_turn_index=1,
+                ),
+                make_turn_run(
+                    transcribed="cherry",
+                    reply="cherry is right",
+                    vad_end_ms=4000,
+                    first_byte_ms=4100,
+                    user_turn_index=2,
+                ),
+            ]
+        )
+
+        # All three real transcripts match the gold text exactly.  Pre-fix
+        # the second/third user turns aligned onto the false-trigger /
+        # second-real TurnRun, which broke WER away from 0.
+        assert transcription_wer(conv, run) == pytest.approx(0.0)
+        # Each gold fact appears in its matching reply -> 100% faithfulness.
+        assert response_faithfulness(conv, run) == pytest.approx(1.0)
+        # No hedging in any of the three real replies -> 100% decisiveness.
+        assert llm_decisiveness(run, conv) == pytest.approx(1.0)
+        # score_run wires this through to the pooled aggregates as well.
+        report = score_run([(conv, run)])
+        assert report.aggregate_wer == pytest.approx(0.0)
+        assert report.aggregate_faithfulness == pytest.approx(1.0)
+        assert report.aggregate_endpointing_accuracy == pytest.approx(1.0)
+        assert report.aggregate_llm_decisiveness == pytest.approx(1.0)
 
 
 # ---------------------------------------------------------------------------

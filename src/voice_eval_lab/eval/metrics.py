@@ -102,14 +102,40 @@ class IncompleteRunError(ValueError):
     """
 
 
+def _real_turn_runs(run: ConversationRun) -> list[TurnRun]:
+    """Return non-false-trigger turn_runs ordered by `user_turn_index`.
+
+    The pipeline interleaves synthetic false-trigger ``TurnRun`` entries
+    into ``run.turn_runs`` (see :class:`VoicePipeline.run`). A naive
+    ``zip(user_turns, run.turn_runs)`` therefore misaligns every user
+    turn after the first injected false trigger, corrupting per-turn
+    metrics (WER, faithfulness, barge-in, endpointing, decisiveness)
+    and the pooled aggregates that build on them. Filtering out
+    false-trigger entries and sorting by ``user_turn_index`` recovers
+    the 1:1 alignment with the source ``conversation.turns`` user-only
+    sequence regardless of how many synthetic turns were appended.
+    """
+    return sorted(
+        [tr for tr in run.turn_runs if not tr.false_trigger],
+        key=lambda tr: tr.user_turn_index,
+    )
+
+
 def _check_turn_coverage(conversation: Conversation, run: ConversationRun) -> None:
-    """Raise `IncompleteRunError` when the run is missing turn_runs."""
+    """Raise `IncompleteRunError` when the run is missing real turn_runs.
+
+    Counts non-false-trigger turn_runs against user turns: synthetic
+    false triggers are extras the pipeline appends and must not paper
+    over a real adapter that dropped a turn. If the gap was measured
+    against ``len(run.turn_runs)`` a single injected false trigger
+    could mask one missing real reply.
+    """
     expected = sum(1 for t in conversation.turns if t.role is TurnRole.USER)
-    actual = len(run.turn_runs)
+    actual = sum(1 for tr in run.turn_runs if not tr.false_trigger)
     if actual < expected:
         raise IncompleteRunError(
             f"conversation {conversation.conv_id!r} has {expected} user turns "
-            f"but the run produced only {actual} turn_runs — "
+            f"but the run produced only {actual} non-false-trigger turn_runs — "
             "an adapter dropped turns and would otherwise score silently better"
         )
 
@@ -128,9 +154,10 @@ def turn_latency_stats(turn_runs: list[TurnRun]) -> TurnLatencyStats:
 
 def transcription_wer(conversation: Conversation, run: ConversationRun) -> float:
     user_turns = [t for t in conversation.turns if t.role is TurnRole.USER]
+    real_turns = _real_turn_runs(run)
     references: list[str] = []
     hypotheses: list[str] = []
-    for ut, tr in zip(user_turns, run.turn_runs, strict=False):
+    for ut, tr in zip(user_turns, real_turns, strict=False):
         if not ut.text.strip():
             continue
         references.append(ut.text)
@@ -163,9 +190,7 @@ def _faithfulness_counts(
     user_turns = [t for t in conversation.turns if t.role is TurnRole.USER]
     grounded = 0
     counted = 0
-    for i, tr in enumerate(run.turn_runs):
-        if tr.false_trigger:
-            continue
+    for i, tr in enumerate(_real_turn_runs(run)):
         # Skip turns whose source user utterance was blank/whitespace
         # (silence frame, cough-only VAD trigger, etc.).
         if i < len(user_turns) and not user_turns[i].text.strip():
@@ -219,12 +244,13 @@ def _barge_in_counts(
     interruptible = [t for t in user_turns if t.interrupted]
     if not interruptible:
         return 0, 0
+    real_turns = _real_turn_runs(run)
     yielded = 0
     for ut in interruptible:
         idx = user_turns.index(ut)
-        if idx >= len(run.turn_runs):
+        if idx >= len(real_turns):
             continue
-        tr = run.turn_runs[idx]
+        tr = real_turns[idx]
         yield_span = _find_span(tr.spans, "barge_in.yield")
         if yield_span is None:
             continue
@@ -343,7 +369,7 @@ def _endpointing_counts(
     user_turns = [t for t in conversation.turns if t.role is TurnRole.USER]
     aligned = 0
     counted = 0
-    for ut, tr in zip(user_turns, run.turn_runs, strict=False):
+    for ut, tr in zip(user_turns, _real_turn_runs(run), strict=False):
         vad = _find_span(tr.spans, "vad_end")
         if vad is None:
             continue
@@ -405,9 +431,7 @@ def _decisiveness_counts(
     )
     counted = 0
     decisive = 0
-    for i, tr in enumerate(run.turn_runs):
-        if tr.false_trigger:
-            continue
+    for i, tr in enumerate(_real_turn_runs(run)):
         # Skip turns whose source user utterance was blank/whitespace.
         if user_turns is not None and i < len(user_turns) and not user_turns[i].text.strip():
             continue
@@ -562,7 +586,7 @@ def _pool_run_samples(
     pool = _RunPool()
     for c, r in pairs:
         user_turns = [t for t in c.turns if t.role is TurnRole.USER]
-        for ut, tr in zip(user_turns, r.turn_runs, strict=False):
+        for ut, tr in zip(user_turns, _real_turn_runs(r), strict=False):
             if ut.text.strip():
                 pool.wer_refs.append(ut.text)
                 pool.wer_hyps.append(tr.transcribed_text)
