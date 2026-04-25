@@ -187,6 +187,14 @@ def endpointing_accuracy(
 ) -> float:
     """Fraction of user turns where VAD-end aligned with the gold utterance end.
 
+    Three cases:
+
+    - No user turns at all → 1.0 (vacuously true; nothing to be wrong about).
+    - User turns exist but zero produced a measurable `vad_end` span → 0.0.
+      The metric used to return 1.0 here, which silently turned a broken
+      pipeline (no VAD signal whatsoever) into a perfect score.
+    - User turns exist with measurable VAD ends → fraction within tolerance.
+
     The mock pipeline always lines them up exactly so the headline value
     is 1.0; the metric exists so a real pipeline (whose VAD will be early
     or late) gets scored on a known axis.
@@ -204,7 +212,9 @@ def endpointing_accuracy(
         if abs(vad.ended_at_ms - ut.ended_at_ms) <= tolerance_ms:
             aligned += 1
     if counted == 0:
-        return 1.0
+        # User turns existed but the pipeline emitted no VAD-end spans —
+        # treat as "no signal" rather than a perfect score.
+        return 0.0
     return aligned / counted
 
 

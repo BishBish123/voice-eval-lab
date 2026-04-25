@@ -154,10 +154,43 @@ class TestEndpointingAccuracy:
         )
         assert endpointing_accuracy(conv, run) == 0.5
 
-    def test_no_user_turns(self) -> None:
+    def test_no_user_turns_is_one(self) -> None:
+        # vacuously true: nothing to be wrong about.
         conv = make_conv([])
         run = ConversationRun(conv_id="c", topic="t", user_turns_played=0, turn_runs=[])
         assert endpointing_accuracy(conv, run) == 1.0
+
+    def test_user_turns_no_vad_spans_is_zero(self) -> None:
+        # Pipeline emitted user turns but never produced a vad_end span on any
+        # of them — that's a broken VAD, not a perfect endpointing score.
+        conv = make_conv([make_user("u1", end=1000), make_user("u2", end=2000)])
+        run = ConversationRun(
+            conv_id="c",
+            topic="t",
+            user_turns_played=2,
+            turn_runs=[
+                TurnRun(user_turn_index=0, transcribed_text="x", agent_reply="y", spans=[]),
+                TurnRun(user_turn_index=1, transcribed_text="x", agent_reply="y", spans=[]),
+            ],
+        )
+        assert endpointing_accuracy(conv, run) == 0.0
+
+    def test_user_turns_with_vad_spans_uses_real_math(self) -> None:
+        # Sanity-check that the existing math still runs when a VAD signal
+        # is present.
+        conv = make_conv(
+            [
+                make_user("a", end=1000),
+                make_user("b", start=1500, end=2500),
+            ]
+        )
+        run = make_run(
+            [
+                make_turn_run(vad_end_ms=1000, first_byte_ms=1100),  # aligned
+                make_turn_run(vad_end_ms=2700, first_byte_ms=2800),  # off by 200
+            ]
+        )
+        assert endpointing_accuracy(conv, run) == 0.5
 
     def test_custom_tolerance(self) -> None:
         conv = make_conv([make_user("hello", end=1000)])
