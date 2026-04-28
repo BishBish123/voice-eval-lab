@@ -28,6 +28,7 @@ Diagnostic metrics (added after the v0.1 set proved coarse for tuning):
 
 from __future__ import annotations
 
+import html
 import math
 
 import jiwer
@@ -349,10 +350,19 @@ def render_report(report: EvalReport) -> str:
 
 
 def render_report_html(report: EvalReport) -> str:
-    """HTML variant of `render_report` for browser-friendly viewing."""
+    """HTML variant of `render_report` for browser-friendly viewing.
+
+    All dynamic strings (conv_id, topic, free-form metric labels) are
+    passed through `html.escape(..., quote=True)` so a crafted scores.json
+    cannot inject <script> or break out of attribute quoting in the
+    rendered report.
+    """
+
+    def esc(value: object) -> str:
+        return html.escape(str(value), quote=True)
 
     def row(metric: str, value: str) -> str:
-        return f"    <tr><td>{metric}</td><td class='num'>{value}</td></tr>"
+        return f"    <tr><td>{esc(metric)}</td><td class='num'>{esc(value)}</td></tr>"
 
     headline_rows = [
         row("Conversations", str(report.n_conversations)),
@@ -377,8 +387,8 @@ def render_report_html(report: EvalReport) -> str:
     for s in report.per_conversation:
         per_conv_rows.append(
             "    <tr>"
-            f"<td>{s.conv_id}</td>"
-            f"<td>{s.topic}</td>"
+            f"<td>{esc(s.conv_id)}</td>"
+            f"<td>{esc(s.topic)}</td>"
             f"<td class='num'>{s.turn_latency.p95_ms:.0f}</td>"
             f"<td class='num'>{s.transcription_wer:.2%}</td>"
             f"<td class='num'>{s.response_faithfulness:.2%}</td>"

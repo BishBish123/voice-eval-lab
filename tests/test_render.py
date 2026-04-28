@@ -152,6 +152,61 @@ class TestRenderHTML:
 
 
 # ---------------------------------------------------------------------------
+# HTML escaping — a crafted scores.json must not inject script or attrs
+# ---------------------------------------------------------------------------
+
+
+def _report_with_conv(conv_id: str = "x", topic: str = "topic-x") -> EvalReport:
+    return EvalReport(
+        n_conversations=1,
+        aggregate_turn_latency=TurnLatencyStats(p50_ms=200.0, p95_ms=200.0, p99_ms=200.0, n=1),
+        aggregate_wer=0.0,
+        aggregate_faithfulness=1.0,
+        aggregate_barge_in_success=1.0,
+        aggregate_false_trigger_rate=0.0,
+        aggregate_barge_in_latency_p95_ms=80.0,
+        aggregate_tts_first_byte_jitter_ms=10.0,
+        aggregate_endpointing_accuracy=1.0,
+        aggregate_llm_decisiveness=1.0,
+        per_conversation=[
+            ConversationScore(
+                conv_id=conv_id,
+                topic=topic,
+                turn_latency=TurnLatencyStats(p50_ms=200.0, p95_ms=200.0, p99_ms=200.0, n=1),
+                transcription_wer=0.0,
+                response_faithfulness=1.0,
+                barge_in_success_rate=1.0,
+                false_trigger_rate=0.0,
+                barge_in_latency_p95_ms=80.0,
+                tts_first_byte_jitter_ms=10.0,
+                endpointing_accuracy=1.0,
+                llm_decisiveness=1.0,
+            ),
+        ],
+    )
+
+
+class TestHTMLEscape:
+    def test_html_escapes_conv_id(self) -> None:
+        out = render_report_html(_report_with_conv(conv_id="<script>alert(1)</script>"))
+        # Raw <script> tag must NOT appear; the entity-encoded form must.
+        assert "<script>alert(1)</script>" not in out
+        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in out
+
+    def test_html_escapes_topic(self) -> None:
+        out = render_report_html(_report_with_conv(topic="<img src=x onerror=alert(1)>"))
+        assert "<img src=x onerror=alert(1)>" not in out
+        assert "&lt;img src=x onerror=alert(1)&gt;" in out
+
+    def test_html_escapes_quoted_attrs(self) -> None:
+        # A double quote in conv_id should be encoded so it can't break out
+        # of an attribute value.
+        out = render_report_html(_report_with_conv(conv_id='evil"value'))
+        assert 'evil"value' not in out
+        assert "evil&quot;value" in out
+
+
+# ---------------------------------------------------------------------------
 # score_run + render integration on a hand-rolled fixture
 # ---------------------------------------------------------------------------
 
