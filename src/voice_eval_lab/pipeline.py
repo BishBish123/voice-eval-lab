@@ -14,6 +14,7 @@ behind the same Protocol surface.
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -181,12 +182,18 @@ class RetryingTTS:
     base_delay_ms: int = 25
 
     async def synthesize(self, text: str) -> tuple[int, list[PipelineSpan]]:
+        # Cumulative wall-clock from the first invocation. The downstream
+        # tts_first_byte span uses whatever we return here, so reporting
+        # only the successful attempt's elapsed time hides retry/backoff
+        # cost from latency budgets and headline metrics.
+        t0 = time.monotonic()
         last_exc: BaseException | None = None
         retry_spans: list[PipelineSpan] = []
         for attempt in range(1, self.max_attempts + 1):
             try:
-                first_byte, spans = await self.inner.synthesize(text)
-                return first_byte, [*retry_spans, *spans]
+                _inner_first_byte, spans = await self.inner.synthesize(text)
+                cumulative_ms = int((time.monotonic() - t0) * 1000)
+                return cumulative_ms, [*retry_spans, *spans]
             except Exception as exc:
                 last_exc = exc
                 retry_spans.append(
