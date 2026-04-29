@@ -167,6 +167,16 @@ class FlakyTTS:
         return await self.inner.synthesize(text)
 
 
+# Transient-error types worth retrying. KeyboardInterrupt, SystemExit,
+# CancelledError, programming bugs (TypeError, AttributeError) — all of
+# those should propagate immediately rather than be retried.
+RETRYABLE_TTS_ERRORS: tuple[type[BaseException], ...] = (
+    TimeoutError,
+    ConnectionError,
+    RuntimeError,
+)
+
+
 @dataclass
 class RetryingTTS:
     """Decorator that wraps any TTS protocol with exponential-backoff retries.
@@ -175,6 +185,11 @@ class RetryingTTS:
     document transient 5xx. The retry policy is intentionally bounded:
     voice agents that can't yield first byte under ~600ms are unusable,
     so we cap at `max_attempts` and surface the exception otherwise.
+
+    Only a narrow set of exceptions counts as retryable
+    (`RETRYABLE_TTS_ERRORS`); programmer errors (TypeError, AttributeError)
+    and lifecycle signals (KeyboardInterrupt, asyncio.CancelledError)
+    propagate immediately so we don't burn the retry budget on bugs.
     """
 
     inner: TTS
@@ -194,7 +209,7 @@ class RetryingTTS:
                 _inner_first_byte, spans = await self.inner.synthesize(text)
                 cumulative_ms = int((time.monotonic() - t0) * 1000)
                 return cumulative_ms, [*retry_spans, *spans]
-            except Exception as exc:
+            except RETRYABLE_TTS_ERRORS as exc:
                 last_exc = exc
                 retry_spans.append(
                     PipelineSpan(

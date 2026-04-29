@@ -17,10 +17,12 @@ import sys
 from pathlib import Path
 
 import typer
+from pydantic import ValidationError
 from rich.console import Console
 from rich.table import Table
 
 from voice_eval_lab.baseline import (
+    BaselineSchemaError,
     RegressionThresholds,
     read_baseline,
     render_diffs,
@@ -154,7 +156,20 @@ def compare(
     ),
 ) -> None:
     """Diff a fresh run against a baseline; exit non-zero if any metric regressed."""
-    base = read_baseline(baseline_path)
+    try:
+        base = read_baseline(baseline_path)
+    except FileNotFoundError:
+        console.print(f"[red]baseline not found:[/] {baseline_path}", style="bold")
+        raise typer.Exit(code=2) from None
+    except json.JSONDecodeError as exc:
+        console.print(f"[red]baseline is not valid JSON:[/] {baseline_path} ({exc})")
+        raise typer.Exit(code=2) from None
+    except BaselineSchemaError as exc:
+        console.print(f"[red]baseline schema error:[/] {exc}")
+        raise typer.Exit(code=2) from None
+    except ValidationError as exc:
+        console.print(f"[red]baseline failed validation:[/] {exc}")
+        raise typer.Exit(code=2) from None
     current = _run_eval(
         wer_substitution_rate=wer_substitution_rate,
         false_trigger_rate=false_trigger_rate,
@@ -181,7 +196,17 @@ def render(
     fmt: str = typer.Option("markdown", "--format", help="One of: markdown, html."),
 ) -> None:
     """Re-render an existing scores.json into markdown or HTML."""
-    report = EvalReport.model_validate(json.loads(json_path.read_text()))
+    try:
+        report = EvalReport.model_validate(json.loads(json_path.read_text()))
+    except FileNotFoundError:
+        console.print(f"[red]scores file not found:[/] {json_path}")
+        raise typer.Exit(code=2) from None
+    except json.JSONDecodeError as exc:
+        console.print(f"[red]scores file is not valid JSON:[/] {json_path} ({exc})")
+        raise typer.Exit(code=2) from None
+    except ValidationError as exc:
+        console.print(f"[red]scores file failed validation:[/] {exc}")
+        raise typer.Exit(code=2) from None
     if fmt == "markdown":
         body = render_report(report)
     elif fmt == "html":

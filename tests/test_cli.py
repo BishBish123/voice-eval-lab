@@ -135,3 +135,50 @@ class TestRenderCommand:
             ["render", "--from", str(scores), "--out", str(tmp_path / "x"), "--format", "yaml"],
         )
         assert result.exit_code != 0
+
+    def test_render_missing_file_exits_2(self, tmp_path: Path) -> None:
+        result = runner.invoke(
+            app,
+            [
+                "render",
+                "--from",
+                str(tmp_path / "nope.json"),
+                "--out",
+                str(tmp_path / "x.md"),
+            ],
+        )
+        assert result.exit_code == 2, result.output
+
+    def test_render_invalid_json_exits_2(self, tmp_path: Path) -> None:
+        bad = tmp_path / "scores.json"
+        bad.write_text("{ this is not json")
+        result = runner.invoke(
+            app,
+            ["render", "--from", str(bad), "--out", str(tmp_path / "x.md")],
+        )
+        assert result.exit_code == 2, result.output
+
+
+class TestCompareErrors:
+    def test_compare_missing_baseline_exits_2(self, tmp_path: Path) -> None:
+        result = runner.invoke(
+            app,
+            ["compare", "--baseline", str(tmp_path / "missing.json")],
+        )
+        assert result.exit_code == 2, result.output
+
+    def test_compare_unversioned_baseline_exits_2(self, tmp_path: Path) -> None:
+        # A pre-versioning baseline file should be rejected with a clear error.
+        bad = tmp_path / "old-baseline.json"
+        # Bare report blob (no schema_version wrapper).
+        runner.invoke(app, ["baseline", "--save", str(tmp_path / "real.json")])
+        wrapped = json.loads((tmp_path / "real.json").read_text())
+        bad.write_text(json.dumps(wrapped["report"]))
+        result = runner.invoke(app, ["compare", "--baseline", str(bad)])
+        assert result.exit_code == 2, result.output
+
+    def test_compare_invalid_json_exits_2(self, tmp_path: Path) -> None:
+        bad = tmp_path / "baseline.json"
+        bad.write_text("not json {")
+        result = runner.invoke(app, ["compare", "--baseline", str(bad)])
+        assert result.exit_code == 2, result.output
