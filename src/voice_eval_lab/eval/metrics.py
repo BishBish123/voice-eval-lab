@@ -299,6 +299,7 @@ def score_run(pairs: list[tuple[Conversation, ConversationRun]]) -> EvalReport:
             aggregate_barge_in_success=0.0,
             aggregate_false_trigger_rate=0.0,
             aggregate_barge_in_latency_p95_ms=None,
+            aggregate_tts_first_byte_jitter_ms=None,
             per_conversation=[],
         )
 
@@ -324,6 +325,14 @@ def score_run(pairs: list[tuple[Conversation, ConversationRun]]) -> EvalReport:
     else:
         agg_barge_p95 = None
 
+    # Jitter is the population stddev of first-byte latency *across all
+    # turns* — see ARCHITECTURE.md. Mean-of-per-conv-stddevs underweights
+    # variance that crosses conversation boundaries.
+    if len(all_latencies) >= 2:
+        agg_jitter: float | None = float(np.std(all_latencies, ddof=0))
+    else:
+        agg_jitter = None
+
     return EvalReport(
         n_conversations=len(per_conv),
         aggregate_turn_latency=_percentile_stats(all_latencies),
@@ -332,9 +341,7 @@ def score_run(pairs: list[tuple[Conversation, ConversationRun]]) -> EvalReport:
         aggregate_barge_in_success=sum(s.barge_in_success_rate for s in per_conv) / len(per_conv),
         aggregate_false_trigger_rate=sum(s.false_trigger_rate for s in per_conv) / len(per_conv),
         aggregate_barge_in_latency_p95_ms=agg_barge_p95,
-        aggregate_tts_first_byte_jitter_ms=(
-            sum(s.tts_first_byte_jitter_ms for s in per_conv) / len(per_conv)
-        ),
+        aggregate_tts_first_byte_jitter_ms=agg_jitter,
         aggregate_endpointing_accuracy=(
             sum(s.endpointing_accuracy for s in per_conv) / len(per_conv)
         ),
@@ -366,9 +373,12 @@ def render_report(report: EvalReport) -> str:
         else f"{report.aggregate_barge_in_latency_p95_ms:.0f}"
     )
     lines.append(f"| Barge-in yield p95 (ms) | {barge_p95_cell} |")
-    lines.append(
-        f"| TTS first-byte jitter (ms) | {report.aggregate_tts_first_byte_jitter_ms:.1f} |"
+    jitter_cell = (
+        "n/a"
+        if report.aggregate_tts_first_byte_jitter_ms is None
+        else f"{report.aggregate_tts_first_byte_jitter_ms:.1f}"
     )
+    lines.append(f"| TTS first-byte jitter (ms) | {jitter_cell} |")
     lines.append(f"| Endpointing accuracy (mean) | {report.aggregate_endpointing_accuracy:.2%} |")
     lines.append(f"| LLM decisiveness (mean) | {report.aggregate_llm_decisiveness:.2%} |")
     lines.append("")
@@ -426,7 +436,12 @@ def render_report_html(report: EvalReport) -> str:
             if report.aggregate_barge_in_latency_p95_ms is None
             else f"{report.aggregate_barge_in_latency_p95_ms:.0f}",
         ),
-        row("TTS first-byte jitter (ms)", f"{report.aggregate_tts_first_byte_jitter_ms:.1f}"),
+        row(
+            "TTS first-byte jitter (ms)",
+            "n/a"
+            if report.aggregate_tts_first_byte_jitter_ms is None
+            else f"{report.aggregate_tts_first_byte_jitter_ms:.1f}",
+        ),
         row("Endpointing accuracy (mean)", f"{report.aggregate_endpointing_accuracy:.2%}"),
         row("LLM decisiveness (mean)", f"{report.aggregate_llm_decisiveness:.2%}"),
     ]

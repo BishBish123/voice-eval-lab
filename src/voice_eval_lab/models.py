@@ -134,7 +134,13 @@ class EvalReport(BaseModel):
             "None when no conversation produced a yield span (no signal)."
         ),
     )
-    aggregate_tts_first_byte_jitter_ms: float = 0.0
+    aggregate_tts_first_byte_jitter_ms: float | None = Field(
+        default=None,
+        description=(
+            "Population stddev of first-byte latency pooled across the run, in ms. "
+            "None when no conversation produced first-byte spans."
+        ),
+    )
     aggregate_endpointing_accuracy: float = 1.0
     aggregate_llm_decisiveness: float = 1.0
     per_conversation: list[ConversationScore]

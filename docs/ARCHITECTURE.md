@@ -70,6 +70,23 @@ configurable budget and emits `latency_budget.exceeded` spans. Both
 are designed for real adapters where transient failures and tail
 latencies are the operational reality, not the mock pipeline.
 
+## Aggregation across conversations
+
+Two headline metrics are computed from a *pooled* sample list (every
+turn, every conversation), not the mean of per-conversation scalars:
+
+- `aggregate_barge_in_latency_p95_ms` — global p95 over all
+  `barge_in.yield` durations.
+- `aggregate_tts_first_byte_jitter_ms` — population stddev (`ddof=0`)
+  over all `vad_end -> tts_first_byte` latencies.
+
+Mean-of-aggregates folds zero-signal conversations into the headline
+and underweights variance that crosses conversation boundaries — both
+metrics are designed to surface variance, so we keep the raw sample
+list and let one statistic answer the whole-run question. When no
+signal exists at all (no yield spans, fewer than 2 latency samples)
+the headline reports `None` rather than `0.0`.
+
 ## Baseline + compare
 
 Eval scores are a flat JSON document (`evals/scores.json`). The

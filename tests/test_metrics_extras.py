@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 import pytest
 
 from tests.conftest import make_conv, make_run, make_turn_run, make_user
@@ -383,6 +384,52 @@ class TestAggregateBargeInP95:
         run_b = make_run([make_turn_run()], conv_id="b")
         report = score_run([(conv_a, run_a), (conv_b, run_b)])
         assert report.aggregate_barge_in_latency_p95_ms is None
+
+
+# ---------------------------------------------------------------------------
+# Aggregate jitter — pooled stddev across the whole run, not mean-of-stddevs
+# ---------------------------------------------------------------------------
+
+
+class TestAggregateJitter:
+    def test_aggregate_jitter_uses_global_pool(self) -> None:
+        # Two conversations; the per-turn first-byte latencies vary across
+        # the run. The aggregate should equal the population stddev of
+        # the *pooled* latencies, not the mean of per-conv stddevs.
+        conv_a = make_conv([make_user("a"), make_user("aa")], conv_id="a")
+        conv_b = make_conv([make_user("b"), make_user("bb")], conv_id="b")
+        run_a = make_run(
+            [
+                make_turn_run(vad_end_ms=0, first_byte_ms=100),
+                make_turn_run(vad_end_ms=0, first_byte_ms=300, user_turn_index=1),
+            ],
+            conv_id="a",
+        )
+        run_b = make_run(
+            [
+                make_turn_run(vad_end_ms=0, first_byte_ms=200),
+                make_turn_run(vad_end_ms=0, first_byte_ms=400, user_turn_index=1),
+            ],
+            conv_id="b",
+        )
+        report = score_run([(conv_a, run_a), (conv_b, run_b)])
+        expected = float(np.std([100.0, 300.0, 200.0, 400.0], ddof=0))
+        assert report.aggregate_tts_first_byte_jitter_ms == pytest.approx(expected)
+
+    def test_aggregate_jitter_is_none_with_no_signal(self) -> None:
+        # Conversations with user turns but turn_runs that emit no
+        # vad_end/first_byte spans produce zero pooled samples.
+        conv = make_conv([make_user("u")], conv_id="x")
+        run = ConversationRun(
+            conv_id="x",
+            topic="t",
+            user_turns_played=1,
+            turn_runs=[
+                TurnRun(user_turn_index=0, transcribed_text="x", agent_reply="y", spans=[]),
+            ],
+        )
+        report = score_run([(conv, run)])
+        assert report.aggregate_tts_first_byte_jitter_ms is None
 
 
 # ---------------------------------------------------------------------------
