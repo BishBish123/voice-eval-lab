@@ -56,6 +56,28 @@ HEDGING_PHRASES = (
 )
 
 
+class IncompleteRunError(ValueError):
+    """Raised when a `ConversationRun` has fewer turn_runs than the conversation has user turns.
+
+    Adapters that silently drop later turns must surface as an error
+    rather than score better than an honest pipeline. Without this check
+    a real LLM that crashed mid-conversation would look perfect on every
+    user turn it managed to answer.
+    """
+
+
+def _check_turn_coverage(conversation: Conversation, run: ConversationRun) -> None:
+    """Raise `IncompleteRunError` when the run is missing turn_runs."""
+    expected = sum(1 for t in conversation.turns if t.role is TurnRole.USER)
+    actual = len(run.turn_runs)
+    if actual < expected:
+        raise IncompleteRunError(
+            f"conversation {conversation.conv_id!r} has {expected} user turns "
+            f"but the run produced only {actual} turn_runs — "
+            "an adapter dropped turns and would otherwise score silently better"
+        )
+
+
 def turn_latency_stats(turn_runs: list[TurnRun]) -> TurnLatencyStats:
     """Per-turn latency = first-byte minus vad_end, in ms."""
     samples: list[float] = []
@@ -248,6 +270,7 @@ def llm_decisiveness(run: ConversationRun) -> float:
 
 
 def score_conversation(conversation: Conversation, run: ConversationRun) -> ConversationScore:
+    _check_turn_coverage(conversation, run)
     return ConversationScore(
         conv_id=conversation.conv_id,
         topic=conversation.topic,
@@ -493,6 +516,7 @@ def _percentile_stats(samples: list[float]) -> TurnLatencyStats:
 __all__ = [
     "ConversationScore",
     "EvalReport",
+    "IncompleteRunError",
     "barge_in_latency_p95_ms",
     "barge_in_success_rate",
     "endpointing_accuracy",

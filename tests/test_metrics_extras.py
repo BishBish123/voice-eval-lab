@@ -8,9 +8,11 @@ import pytest
 
 from tests.conftest import make_conv, make_run, make_turn_run, make_user
 from voice_eval_lab.eval.metrics import (
+    IncompleteRunError,
     barge_in_latency_p95_ms,
     endpointing_accuracy,
     llm_decisiveness,
+    score_conversation,
     score_run,
     tts_first_byte_jitter_ms,
 )
@@ -381,3 +383,57 @@ class TestAggregateBargeInP95:
         run_b = make_run([make_turn_run()], conv_id="b")
         report = score_run([(conv_a, run_a), (conv_b, run_b)])
         assert report.aggregate_barge_in_latency_p95_ms is None
+
+
+# ---------------------------------------------------------------------------
+# Turn coverage — adapters that drop turns must surface, not score better
+# ---------------------------------------------------------------------------
+
+
+class TestTurnCoverage:
+    def test_metrics_raise_on_incomplete_run(self) -> None:
+        conv = make_conv(
+            [
+                make_user("u1", end=1000),
+                make_user("u2", start=1500, end=2500),
+                make_user("u3", start=3000, end=4000),
+            ],
+            gold=["x"],
+        )
+        # Only one turn_run for three user turns — adapter dropped the rest.
+        run = make_run([make_turn_run(vad_end_ms=1000, first_byte_ms=1100)])
+        with pytest.raises(IncompleteRunError, match="3 user turns"):
+            score_conversation(conv, run)
+        with pytest.raises(IncompleteRunError, match="3 user turns"):
+            score_run([(conv, run)])
+
+    def test_run_with_full_coverage_passes(self) -> None:
+        conv = make_conv(
+            [
+                make_user("u1", end=1000),
+                make_user("u2", start=1500, end=2500),
+            ],
+            gold=["x"],
+        )
+        run = make_run(
+            [
+                make_turn_run(vad_end_ms=1000, first_byte_ms=1100),
+                make_turn_run(vad_end_ms=2500, first_byte_ms=2600, user_turn_index=1),
+            ]
+        )
+        # Should not raise — full coverage.
+        score = score_conversation(conv, run)
+        assert score.conv_id == "c"
+
+    def test_run_with_extra_false_triggers_passes(self) -> None:
+        # Pipelines emit synthetic false-trigger turn_runs *after* the
+        # user turns; coverage check only flags missing turns, not extras.
+        conv = make_conv([make_user("u1", end=1000)], gold=["x"])
+        run = make_run(
+            [
+                make_turn_run(vad_end_ms=1000, first_byte_ms=1100),
+                make_turn_run(false_trigger=True, user_turn_index=1),
+            ]
+        )
+        score = score_conversation(conv, run)
+        assert score.conv_id == "c"

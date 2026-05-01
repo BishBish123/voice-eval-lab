@@ -34,6 +34,7 @@ from voice_eval_lab.baseline import (
 from voice_eval_lab.eval.golden import default_golden_set
 from voice_eval_lab.eval.metrics import (
     EvalReport,
+    IncompleteRunError,
     render_report,
     render_report_html,
     score_run,
@@ -90,10 +91,14 @@ def run(
     ),
 ) -> None:
     """Score the bundled mock pipeline over the bundled golden set."""
-    report = _run_eval(
-        wer_substitution_rate=wer_substitution_rate,
-        false_trigger_rate=false_trigger_rate,
-    )
+    try:
+        report = _run_eval(
+            wer_substitution_rate=wer_substitution_rate,
+            false_trigger_rate=false_trigger_rate,
+        )
+    except IncompleteRunError as exc:
+        console.print(f"[red]incomplete run:[/] {exc}")
+        raise typer.Exit(code=2) from None
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(render_report(report))
     console.print(f"[green]wrote[/] {out}")
@@ -134,10 +139,14 @@ def baseline(
     false_trigger_rate: float = typer.Option(0.0),
 ) -> None:
     """Run the eval and persist the headline scores as a baseline."""
-    report = _run_eval(
-        wer_substitution_rate=wer_substitution_rate,
-        false_trigger_rate=false_trigger_rate,
-    )
+    try:
+        report = _run_eval(
+            wer_substitution_rate=wer_substitution_rate,
+            false_trigger_rate=false_trigger_rate,
+        )
+    except IncompleteRunError as exc:
+        console.print(f"[red]incomplete run:[/] {exc}")
+        raise typer.Exit(code=2) from None
     write_baseline(report, save)
     console.print(f"[green]wrote baseline[/] {save}")
 
@@ -170,10 +179,14 @@ def compare(
     except ValidationError as exc:
         console.print(f"[red]baseline failed validation:[/] {exc}")
         raise typer.Exit(code=2) from None
-    current = _run_eval(
-        wer_substitution_rate=wer_substitution_rate,
-        false_trigger_rate=false_trigger_rate,
-    )
+    try:
+        current = _run_eval(
+            wer_substitution_rate=wer_substitution_rate,
+            false_trigger_rate=false_trigger_rate,
+        )
+    except IncompleteRunError as exc:
+        console.print(f"[red]incomplete run:[/] {exc}")
+        raise typer.Exit(code=2) from None
     thresholds = RegressionThresholds(
         latency_p95_ms=latency_threshold_ms,
         wer=wer_threshold,
