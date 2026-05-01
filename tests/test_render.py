@@ -258,3 +258,62 @@ class TestScoreRunRender:
         html = render_report_html(report)
         assert "## Headline" in md
         assert "<title>Voice eval report</title>" in html
+
+
+class TestEndpointingAggregateDefault:
+    """``aggregate_endpointing_accuracy`` must default to ``None``,
+    matching every other nullable corpus-pooled aggregate on
+    ``EvalReport``. The earlier ``default=1.0`` made the ``render``
+    subcommand silently display 100% endpointing accuracy when
+    re-rendering a ``scores.json`` written before the field was added
+    to the schema — Pydantic's ``Field(default=1.0)`` fills the slot
+    from the default rather than treating it as missing data, so
+    "no signal" was indistinguishable from "perfect signal".
+    """
+
+    def test_default_is_none_not_one_when_field_omitted(self) -> None:
+        # Simulate the actual regression scenario: re-rendering a
+        # ``scores.json`` whose schema predates the
+        # ``aggregate_endpointing_accuracy`` field. Pydantic must
+        # surface the absence as ``None``, not as ``1.0``.
+        from voice_eval_lab.models import EvalReport
+
+        legacy_payload = {
+            "n_conversations": 0,
+            "aggregate_turn_latency": {
+                "p50_ms": 0.0,
+                "p95_ms": 0.0,
+                "p99_ms": 0.0,
+                "n": 0,
+            },
+            "aggregate_wer": 0.0,
+            "per_conversation": [],
+            # Note: aggregate_endpointing_accuracy intentionally omitted.
+        }
+        report = EvalReport.model_validate(legacy_payload)
+        assert report.aggregate_endpointing_accuracy is None, (
+            "default=1.0 silently inflates accuracy to 100% on legacy "
+            "scores.json files; the Round-5 fix is default=None"
+        )
+
+    def test_default_aligns_with_sibling_aggregates(self) -> None:
+        # All sibling nullable corpus-pooled aggregates on EvalReport
+        # default to None; endpointing must follow the same pattern so
+        # downstream rendering treats absent data uniformly.
+        from voice_eval_lab.models import EvalReport
+
+        fields = EvalReport.model_fields
+        for name in (
+            "aggregate_faithfulness",
+            "aggregate_barge_in_success",
+            "aggregate_false_trigger_rate",
+            "aggregate_barge_in_latency_p95_ms",
+            "aggregate_tts_first_byte_jitter_ms",
+            "aggregate_llm_decisiveness",
+            "aggregate_endpointing_accuracy",
+        ):
+            assert fields[name].default is None, (
+                f"{name}: every nullable corpus-pooled aggregate must "
+                f"default to None so 'no signal' renders as n/a; got "
+                f"{fields[name].default!r}"
+            )

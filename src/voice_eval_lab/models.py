@@ -180,13 +180,17 @@ class EvalReport(BaseModel):
         ),
     )
     aggregate_endpointing_accuracy: float | None = Field(
-        default=1.0,
+        default=None,
         description=(
             "Corpus-pooled endpointing accuracy: "
             "sum(aligned_turns) / sum(measured_turns_with_vad_end) across the run. "
             "Pooled rather than mean-of-per-conversation so long conversations with "
             "many measured turns weigh proportionally more. "
-            "None when no conversation produced any vad_end span."
+            "None when no conversation produced any vad_end span. "
+            "Default is ``None`` (matching every other nullable aggregate); the "
+            "earlier ``default=1.0`` made ``render`` silently display 100% "
+            "accuracy when re-rendering a ``scores.json`` written before this "
+            "field was added to the schema."
         ),
     )
     aggregate_llm_decisiveness: float | None = Field(
