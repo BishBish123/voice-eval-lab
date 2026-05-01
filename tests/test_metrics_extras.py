@@ -11,6 +11,7 @@ from voice_eval_lab.eval.metrics import (
     barge_in_latency_p95_ms,
     endpointing_accuracy,
     llm_decisiveness,
+    score_run,
     tts_first_byte_jitter_ms,
 )
 from voice_eval_lab.models import (
@@ -341,3 +342,42 @@ class TestSpanShape:
             PipelineSpan(name="barge_in.yield", started_at_ms=0, ended_at_ms=80),
         ]
         assert spans[0].name == "barge_in.yield"
+
+
+# ---------------------------------------------------------------------------
+# Aggregate barge-in p95 — pooled across the run, not the mean of per-conv
+# ---------------------------------------------------------------------------
+
+
+class TestAggregateBargeInP95:
+    def test_aggregate_barge_in_p95_uses_global_pool(self) -> None:
+        # Three conversations: two with barge-in yields and one with none.
+        # Old impl averaged per-conv p95s (incl. zeros) and produced
+        # a much smaller headline; the fix pools yields globally so the
+        # aggregate is a true p95 of the observed durations.
+        conv_a = make_conv([make_user("a", interrupted=True)], conv_id="a")
+        conv_b = make_conv([make_user("b", interrupted=True)], conv_id="b")
+        conv_c = make_conv([make_user("c")], conv_id="c")
+        run_a = make_run(
+            [make_turn_run(interrupted=True, barge_yield_ms=80)],
+            conv_id="a",
+        )
+        run_b = make_run(
+            [
+                make_turn_run(interrupted=True, barge_yield_ms=120),
+                make_turn_run(interrupted=True, barge_yield_ms=200, user_turn_index=1),
+            ],
+            conv_id="b",
+        )
+        run_c = make_run([make_turn_run()], conv_id="c")
+        report = score_run([(conv_a, run_a), (conv_b, run_b), (conv_c, run_c)])
+        # Pooled samples sorted: [80, 120, 200]; idx = int(0.95 * 3) = 2 -> 200.
+        assert report.aggregate_barge_in_latency_p95_ms == 200.0
+
+    def test_aggregate_barge_in_p95_returns_none_with_no_signal(self) -> None:
+        conv_a = make_conv([make_user("a")], conv_id="a")
+        conv_b = make_conv([make_user("b")], conv_id="b")
+        run_a = make_run([make_turn_run()], conv_id="a")
+        run_b = make_run([make_turn_run()], conv_id="b")
+        report = score_run([(conv_a, run_a), (conv_b, run_b)])
+        assert report.aggregate_barge_in_latency_p95_ms is None

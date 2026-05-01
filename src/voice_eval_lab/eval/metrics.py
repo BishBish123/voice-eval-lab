@@ -274,16 +274,31 @@ def score_run(pairs: list[tuple[Conversation, ConversationRun]]) -> EvalReport:
             aggregate_faithfulness=0.0,
             aggregate_barge_in_success=0.0,
             aggregate_false_trigger_rate=0.0,
+            aggregate_barge_in_latency_p95_ms=None,
             per_conversation=[],
         )
 
     all_latencies: list[float] = []
+    all_barge_yields: list[float] = []
     for _c, r in pairs:
         for tr in r.turn_runs:
             vad = _find_span(tr.spans, "vad_end")
             fb = _find_span(tr.spans, "tts_first_byte")
             if vad and fb:
                 all_latencies.append(float(fb.ended_at_ms - vad.ended_at_ms))
+            for s in tr.spans:
+                if s.name == "barge_in.yield":
+                    all_barge_yields.append(float(s.ended_at_ms - s.started_at_ms))
+
+    # Aggregate barge-in p95 must come from the *pooled* sample, not the
+    # mean of per-conversation p95s — the latter folds zero-signal
+    # conversations into the headline and hides the real distribution.
+    if all_barge_yields:
+        all_barge_yields.sort()
+        idx = min(len(all_barge_yields) - 1, int(0.95 * len(all_barge_yields)))
+        agg_barge_p95: float | None = float(all_barge_yields[idx])
+    else:
+        agg_barge_p95 = None
 
     return EvalReport(
         n_conversations=len(per_conv),
@@ -292,9 +307,7 @@ def score_run(pairs: list[tuple[Conversation, ConversationRun]]) -> EvalReport:
         aggregate_faithfulness=sum(s.response_faithfulness for s in per_conv) / len(per_conv),
         aggregate_barge_in_success=sum(s.barge_in_success_rate for s in per_conv) / len(per_conv),
         aggregate_false_trigger_rate=sum(s.false_trigger_rate for s in per_conv) / len(per_conv),
-        aggregate_barge_in_latency_p95_ms=(
-            sum(s.barge_in_latency_p95_ms for s in per_conv) / len(per_conv)
-        ),
+        aggregate_barge_in_latency_p95_ms=agg_barge_p95,
         aggregate_tts_first_byte_jitter_ms=(
             sum(s.tts_first_byte_jitter_ms for s in per_conv) / len(per_conv)
         ),
@@ -323,7 +336,12 @@ def render_report(report: EvalReport) -> str:
     lines.append(f"| Response faithfulness (mean) | {report.aggregate_faithfulness:.2%} |")
     lines.append(f"| Barge-in success (mean) | {report.aggregate_barge_in_success:.2%} |")
     lines.append(f"| False-trigger rate (mean) | {report.aggregate_false_trigger_rate:.2%} |")
-    lines.append(f"| Barge-in yield p95 (ms) | {report.aggregate_barge_in_latency_p95_ms:.0f} |")
+    barge_p95_cell = (
+        "n/a"
+        if report.aggregate_barge_in_latency_p95_ms is None
+        else f"{report.aggregate_barge_in_latency_p95_ms:.0f}"
+    )
+    lines.append(f"| Barge-in yield p95 (ms) | {barge_p95_cell} |")
     lines.append(
         f"| TTS first-byte jitter (ms) | {report.aggregate_tts_first_byte_jitter_ms:.1f} |"
     )
@@ -378,7 +396,12 @@ def render_report_html(report: EvalReport) -> str:
         row("Response faithfulness (mean)", f"{report.aggregate_faithfulness:.2%}"),
         row("Barge-in success (mean)", f"{report.aggregate_barge_in_success:.2%}"),
         row("False-trigger rate (mean)", f"{report.aggregate_false_trigger_rate:.2%}"),
-        row("Barge-in yield p95 (ms)", f"{report.aggregate_barge_in_latency_p95_ms:.0f}"),
+        row(
+            "Barge-in yield p95 (ms)",
+            "n/a"
+            if report.aggregate_barge_in_latency_p95_ms is None
+            else f"{report.aggregate_barge_in_latency_p95_ms:.0f}",
+        ),
         row("TTS first-byte jitter (ms)", f"{report.aggregate_tts_first_byte_jitter_ms:.1f}"),
         row("Endpointing accuracy (mean)", f"{report.aggregate_endpointing_accuracy:.2%}"),
         row("LLM decisiveness (mean)", f"{report.aggregate_llm_decisiveness:.2%}"),

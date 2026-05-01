@@ -127,7 +127,13 @@ class EvalReport(BaseModel):
     aggregate_faithfulness: float
     aggregate_barge_in_success: float
     aggregate_false_trigger_rate: float
-    aggregate_barge_in_latency_p95_ms: float = 0.0
+    aggregate_barge_in_latency_p95_ms: float | None = Field(
+        default=None,
+        description=(
+            "p95 of barge_in.yield duration pooled across the whole run, in ms. "
+            "None when no conversation produced a yield span (no signal)."
+        ),
+    )
     aggregate_tts_first_byte_jitter_ms: float = 0.0
     aggregate_endpointing_accuracy: float = 1.0
     aggregate_llm_decisiveness: float = 1.0

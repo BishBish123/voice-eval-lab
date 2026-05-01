@@ -63,9 +63,9 @@ class RegressionThresholds:
 @dataclass
 class MetricDiff:
     metric: str
-    baseline: float
-    current: float
-    delta: float
+    baseline: float | None
+    current: float | None
+    delta: float | None
     regressed: bool
 
 
@@ -135,7 +135,22 @@ def compare(
     th = thresholds or RegressionThresholds()
     diffs: list[MetricDiff] = []
 
-    def add(metric: str, b: float, c: float, threshold: float, *, lower_is_better: bool) -> None:
+    def add(
+        metric: str,
+        b: float | None,
+        c: float | None,
+        threshold: float,
+        *,
+        lower_is_better: bool,
+    ) -> None:
+        # When either side has no signal we can't fairly compute a delta.
+        # The diff still appears in the report (so consumers can see "n/a"
+        # for documentation), but it is never flagged as a regression.
+        if b is None or c is None:
+            diffs.append(
+                MetricDiff(metric=metric, baseline=b, current=c, delta=None, regressed=False)
+            )
+            return
         delta = c - b
         regressed = delta > threshold if lower_is_better else -delta > threshold
         diffs.append(
@@ -215,8 +230,11 @@ def render_diffs(diffs: list[MetricDiff]) -> str:
     ]
     for d in diffs:
         flag = "yes" if d.regressed else "no"
+        baseline_cell = "n/a" if d.baseline is None else f"{d.baseline:.4f}"
+        current_cell = "n/a" if d.current is None else f"{d.current:.4f}"
+        delta_cell = "n/a" if d.delta is None else f"{d.delta:+.4f}"
         lines.append(
-            f"| {d.metric} | {d.baseline:.4f} | {d.current:.4f} | {d.delta:+.4f} | {flag} |"
+            f"| {d.metric} | {baseline_cell} | {current_cell} | {delta_cell} | {flag} |"
         )
     return "\n".join(lines) + "\n"
 
