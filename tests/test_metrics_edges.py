@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from tests.conftest import make_conv, make_run, make_turn_run, make_user
 from voice_eval_lab.eval.metrics import (
+    _percentile_stats,
     response_faithfulness,
     score_run,
     transcription_wer,
@@ -259,3 +261,50 @@ class TestPipelineSpanShape:
     def test_attrs_round_trip(self) -> None:
         s = PipelineSpan(name="x", started_at_ms=0, ended_at_ms=10, attrs={"k": "v"})
         assert s.model_dump()["attrs"] == {"k": "v"}
+
+
+# ---------------------------------------------------------------------------
+# Percentile helper — pin the linear-interpolation method so a future change
+# can't silently shift every headline number.
+# ---------------------------------------------------------------------------
+
+
+class TestPercentileMethod:
+    def test_percentile_n0_returns_zeros(self) -> None:
+        stats = _percentile_stats([])
+        assert stats.n == 0
+        assert stats.p50_ms == 0.0
+        assert stats.p95_ms == 0.0
+        assert stats.p99_ms == 0.0
+
+    def test_percentile_n1_returns_single_value(self) -> None:
+        stats = _percentile_stats([42.0])
+        assert stats.n == 1
+        assert stats.p50_ms == 42.0
+        assert stats.p95_ms == 42.0
+        assert stats.p99_ms == 42.0
+
+    def test_percentile_n2_uses_interpolation(self) -> None:
+        # Linear interpolation on [100, 300]: p50 is the midpoint.
+        # The old floor-index version would have returned 300 for p50.
+        stats = _percentile_stats([100.0, 300.0])
+        assert stats.n == 2
+        assert stats.p50_ms == pytest.approx(200.0)
+
+    def test_percentile_n3_well_defined(self) -> None:
+        stats = _percentile_stats([10.0, 20.0, 30.0])
+        assert stats.n == 3
+        # Median of three equally-spaced points is the middle one.
+        assert stats.p50_ms == pytest.approx(20.0)
+        assert stats.p50_ms <= stats.p95_ms <= stats.p99_ms
+
+    def test_percentile_method_is_linear(self) -> None:
+        # Pin the method choice — if anyone switches to "lower"/"higher"
+        # the headline numbers shift quietly. This test fails before
+        # anyone notices the regression.
+        samples = [50.0, 100.0, 150.0, 200.0, 250.0]
+        expected = np.percentile(samples, [50.0, 95.0, 99.0], method="linear")
+        stats = _percentile_stats(samples)
+        assert stats.p50_ms == pytest.approx(float(expected[0]))
+        assert stats.p95_ms == pytest.approx(float(expected[1]))
+        assert stats.p99_ms == pytest.approx(float(expected[2]))

@@ -32,6 +32,7 @@ import html
 import math
 
 import jiwer
+import numpy as np
 
 from voice_eval_lab.models import (
     Conversation,
@@ -501,16 +502,27 @@ def _find_span(spans: list[PipelineSpan], name: str) -> PipelineSpan | None:
 
 
 def _percentile_stats(samples: list[float]) -> TurnLatencyStats:
+    """Compute p50/p95/p99 + sample count using linear-interpolated percentiles.
+
+    Percentiles are computed with `numpy.percentile(..., method="linear")`,
+    which matches the C=1 / "type 7" definition used by R, Excel, and most
+    statistics libraries: percentiles linearly interpolate between adjacent
+    order statistics. The earlier `int(p * n)` floor-index version produced
+    unstable results for small N — for N=2 it would surface the maximum
+    sample as p50, which is non-standard and broke regression detection
+    on tiny golden sets.
+
+    Returns zeros + n=0 for an empty sample list.
+    """
     if not samples:
         return TurnLatencyStats(p50_ms=0.0, p95_ms=0.0, p99_ms=0.0, n=0)
-    sorted_samples = sorted(samples)
-    n = len(sorted_samples)
-
-    def pct(p: float) -> float:
-        idx = min(n - 1, int(p * n))
-        return float(sorted_samples[idx])
-
-    return TurnLatencyStats(p50_ms=pct(0.50), p95_ms=pct(0.95), p99_ms=pct(0.99), n=n)
+    p50, p95, p99 = np.percentile(samples, [50.0, 95.0, 99.0], method="linear")
+    return TurnLatencyStats(
+        p50_ms=float(p50),
+        p95_ms=float(p95),
+        p99_ms=float(p99),
+        n=len(samples),
+    )
 
 
 __all__ = [
