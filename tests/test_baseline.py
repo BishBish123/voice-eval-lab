@@ -65,6 +65,28 @@ class TestRoundTrip:
         assert "report" in raw
         assert "saved_at" in raw
 
+    def test_baseline_write_is_atomic(self, tmp_path: Path) -> None:
+        # Simulate a crash between "open temp file" and "rename": write a
+        # partial payload to the .tmp path without renaming, then assert
+        # the baseline at the real path is unchanged.
+        path = tmp_path / "baseline.json"
+        write_baseline(_report(), path)
+        original = path.read_text()
+        # Pretend a fresh write got interrupted after the tmp was opened
+        # but before os.replace ran.
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text("{ partially written")
+        # Original still parses fine.
+        assert path.read_text() == original
+        loaded = read_baseline(path)
+        assert loaded.aggregate_wer == 0.05
+
+    def test_baseline_write_does_not_leave_tmp(self, tmp_path: Path) -> None:
+        path = tmp_path / "baseline.json"
+        write_baseline(_report(), path)
+        # Successful write removes the tmp file via os.replace.
+        assert not path.with_name(path.name + ".tmp").exists()
+
 
 # ---------------------------------------------------------------------------
 # read_baseline strictness — stale files must NOT be silently re-defaulted

@@ -26,6 +26,7 @@ any field the current `EvalReport` schema declares.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -75,14 +76,24 @@ def _expected_report_fields() -> set[str]:
 
 
 def write_baseline(report: EvalReport, path: Path) -> None:
-    """Persist `report` wrapped with the current schema version + timestamp."""
+    """Persist `report` wrapped with the current schema version + timestamp.
+
+    Writes are atomic: the JSON is written to a sibling `<path>.tmp`
+    file first and then renamed into place via `os.replace`. A crash
+    or Ctrl-C between the two steps leaves the previous baseline
+    intact rather than truncating it — a half-written file would later
+    make `compare` fail with a JSON decode error and lose the
+    regression history.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "schema_version": CURRENT_SCHEMA_VERSION,
         "saved_at": datetime.now(UTC).isoformat(),
         "report": report.model_dump(),
     }
-    path.write_text(json.dumps(payload, indent=2))
+    tmp_path = path.with_name(path.name + ".tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2))
+    os.replace(tmp_path, path)
 
 
 def read_baseline(path: Path) -> EvalReport:
