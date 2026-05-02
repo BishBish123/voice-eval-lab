@@ -59,6 +59,31 @@ class TestRunCommand:
         assert result.exit_code != 0
         assert "0.0, 1.0" in result.output
 
+    def test_run_rejects_symlink_output(self, tmp_path: Path) -> None:
+        # A symlink at the output path could redirect a write into an
+        # unrelated file. The CLI should refuse rather than follow it.
+        target = tmp_path / "real.md"
+        target.write_text("placeholder")
+        link = tmp_path / "REPORT.md"
+        link.symlink_to(target)
+        result = runner.invoke(app, ["run", "--out", str(link)])
+        assert result.exit_code != 0
+        assert "symlink" in result.output
+        # Original target untouched.
+        assert target.read_text() == "placeholder"
+
+    def test_run_handles_oserror_gracefully(self, tmp_path: Path) -> None:
+        # Writing into a directory whose parent is itself a regular file
+        # produces a NotADirectoryError (an OSError subclass). The CLI
+        # should map it to a typer exit-2 with a readable message rather
+        # than dumping a traceback.
+        not_a_dir = tmp_path / "blocker"
+        not_a_dir.write_text("file, not directory")
+        bad = not_a_dir / "REPORT.md"
+        result = runner.invoke(app, ["run", "--out", str(bad)])
+        assert result.exit_code == 2
+        assert "could not write" in result.output
+
 
 class TestListCommand:
     def test_list_outputs_each_conversation(self) -> None:

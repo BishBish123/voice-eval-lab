@@ -57,6 +57,25 @@ def _validate_unit_interval(value: float) -> float:
     return value
 
 
+def _safe_write_text(path: Path, body: str) -> None:
+    """Write `body` to `path`, refusing symlinks and surfacing OSError cleanly.
+
+    Refusing symlinks keeps a malicious or stale link from redirecting
+    a `voice-eval` write into an unrelated file (a security paper-cut
+    on shared dev boxes). OSError is mapped to `typer.Exit(2)` with a
+    readable message so common failures (read-only mount, permissions,
+    no space left) don't surface as raw Python tracebacks.
+    """
+    if path.is_symlink():
+        raise typer.BadParameter(f"refusing to write to symlink: {path}")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body)
+    except OSError as exc:
+        console.print(f"[red]could not write {path}:[/] {exc}")
+        raise typer.Exit(code=2) from None
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -110,12 +129,10 @@ def run(
     except IncompleteRunError as exc:
         console.print(f"[red]incomplete run:[/] {exc}")
         raise typer.Exit(code=2) from None
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(render_report(report))
+    _safe_write_text(out, render_report(report))
     console.print(f"[green]wrote[/] {out}")
     if json_out is not None:
-        json_out.parent.mkdir(parents=True, exist_ok=True)
-        json_out.write_text(json.dumps(report.model_dump(), indent=2))
+        _safe_write_text(json_out, json.dumps(report.model_dump(), indent=2))
         console.print(f"[green]wrote[/] {json_out}")
     # Echo the headline.
     console.print(render_report(report).split("## Per conversation")[0])
@@ -150,6 +167,8 @@ def baseline(
     false_trigger_rate: float = typer.Option(0.0, callback=_validate_unit_interval),
 ) -> None:
     """Run the eval and persist the headline scores as a baseline."""
+    if save.is_symlink():
+        raise typer.BadParameter(f"refusing to write to symlink: {save}")
     try:
         report = _run_eval(
             wer_substitution_rate=wer_substitution_rate,
@@ -158,7 +177,11 @@ def baseline(
     except IncompleteRunError as exc:
         console.print(f"[red]incomplete run:[/] {exc}")
         raise typer.Exit(code=2) from None
-    write_baseline(report, save)
+    try:
+        write_baseline(report, save)
+    except OSError as exc:
+        console.print(f"[red]could not write baseline {save}:[/] {exc}")
+        raise typer.Exit(code=2) from None
     console.print(f"[green]wrote baseline[/] {save}")
 
 
@@ -237,6 +260,5 @@ def render(
         body = render_report_html(report)
     else:
         raise typer.BadParameter(f"unknown format: {fmt!r}")
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(body)
+    _safe_write_text(out, body)
     console.print(f"[green]wrote[/] {out}")
