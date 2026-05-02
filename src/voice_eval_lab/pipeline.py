@@ -395,11 +395,22 @@ def _user_mentions_fact_lead(user_tokens: list[str], fact: str) -> bool:
 
 
 def _inject_wer(text: str, sub_rate: float) -> str:
-    """Substitute `sub_rate` fraction of words with a fixed token to drive WER."""
-    if sub_rate <= 0:
+    """Substitute `sub_rate` fraction of words with a fixed token to drive WER.
+
+    `sub_rate` must lie in [0, 1]. Out-of-band values are rejected
+    explicitly so a typo (e.g. ``--wer-rate 5`` instead of ``0.5``)
+    surfaces as a `ValueError` rather than crashing inside the index
+    arithmetic with a confusing IndexError or silently disabling WER.
+    """
+    if not 0.0 <= sub_rate <= 1.0:
+        raise ValueError(
+            f"wer_substitution_rate must be in [0.0, 1.0], got {sub_rate!r}"
+        )
+    if sub_rate == 0.0:
         return text
     words = text.split()
-    n_sub = int(len(words) * sub_rate)
+    # Cap defensively: at sub_rate=1.0 every word is substituted.
+    n_sub = min(len(words), int(len(words) * sub_rate))
     if n_sub <= 0:
         return text
     # Substitute the first n_sub words deterministically.

@@ -50,6 +50,13 @@ app = typer.Typer(
 console = Console()
 
 
+def _validate_unit_interval(value: float) -> float:
+    """Reject CLI floats outside [0.0, 1.0] with a clear typer error."""
+    if not 0.0 <= value <= 1.0:
+        raise typer.BadParameter(f"must be in [0.0, 1.0], got {value!r}")
+    return value
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -84,10 +91,14 @@ def run(
     out: Path = typer.Option(Path("evals/REPORT.md"), help="Markdown report output."),
     json_out: Path | None = typer.Option(None, "--json", help="Optional JSON dump."),
     wer_substitution_rate: float = typer.Option(
-        0.0, help="Inject WER into mock STT (0..1) to exercise the metric."
+        0.0,
+        help="Inject WER into mock STT (0..1) to exercise the metric.",
+        callback=_validate_unit_interval,
     ),
     false_trigger_rate: float = typer.Option(
-        0.0, help="Force the pipeline to emit a synthetic false-trigger turn (0 or 1)."
+        0.0,
+        help="Force the pipeline to emit a synthetic false-trigger turn (0 or 1).",
+        callback=_validate_unit_interval,
     ),
 ) -> None:
     """Score the bundled mock pipeline over the bundled golden set."""
@@ -135,8 +146,8 @@ def list_cmd() -> None:
 @app.command()
 def baseline(
     save: Path = typer.Option(..., "--save", help="JSON file to write the baseline to."),
-    wer_substitution_rate: float = typer.Option(0.0),
-    false_trigger_rate: float = typer.Option(0.0),
+    wer_substitution_rate: float = typer.Option(0.0, callback=_validate_unit_interval),
+    false_trigger_rate: float = typer.Option(0.0, callback=_validate_unit_interval),
 ) -> None:
     """Run the eval and persist the headline scores as a baseline."""
     try:
@@ -156,8 +167,8 @@ def compare(
     baseline_path: Path = typer.Option(
         ..., "--baseline", help="Baseline JSON file to diff against."
     ),
-    wer_substitution_rate: float = typer.Option(0.0),
-    false_trigger_rate: float = typer.Option(0.0),
+    wer_substitution_rate: float = typer.Option(0.0, callback=_validate_unit_interval),
+    false_trigger_rate: float = typer.Option(0.0, callback=_validate_unit_interval),
     latency_threshold_ms: float = typer.Option(10.0, help="Allowed p95 latency increase (ms)."),
     wer_threshold: float = typer.Option(0.02, help="Allowed WER increase (fraction)."),
     faithfulness_threshold: float = typer.Option(

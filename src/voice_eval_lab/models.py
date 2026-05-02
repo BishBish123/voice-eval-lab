@@ -23,7 +23,9 @@ class Turn(BaseModel):
     # Per-turn WER override for the mock STT (None = use the global rate).
     wer_substitution_rate: float | None = Field(
         default=None,
-        description="Per-turn override for the mock STT word substitution rate.",
+        ge=0.0,
+        le=1.0,
+        description="Per-turn override for the mock STT word substitution rate (0..1).",
     )
 
 

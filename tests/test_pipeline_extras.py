@@ -26,6 +26,7 @@ from voice_eval_lab.pipeline import (
     MockTTS,
     RetryingTTS,
     VoicePipeline,
+    _inject_wer,
 )
 
 
@@ -210,6 +211,25 @@ class TestStreamingLLM:
         async for chunk in llm.stream(history=[], last_user_text="hi", gold_facts=[]):
             chunks.append(chunk)
         assert chunks
+
+
+class TestWERSubstitutionRateValidation:
+    """`_inject_wer` rejects out-of-band rates instead of crashing or silently disabling."""
+
+    def test_wer_rate_above_one_rejected(self) -> None:
+        with pytest.raises(ValueError, match=r"\[0.0, 1.0\]"):
+            _inject_wer("hello world foo bar", 1.5)
+
+    def test_wer_rate_negative_rejected(self) -> None:
+        with pytest.raises(ValueError, match=r"\[0.0, 1.0\]"):
+            _inject_wer("hello world", -0.1)
+
+    def test_wer_rate_at_one_substitutes_all_words(self) -> None:
+        out = _inject_wer("hello world foo bar", 1.0)
+        assert out.split() == ["WERR"] * 4
+
+    def test_wer_rate_at_zero_returns_text_unchanged(self) -> None:
+        assert _inject_wer("hello world", 0.0) == "hello world"
 
 
 class TestMockLLMMatching:

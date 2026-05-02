@@ -41,6 +41,24 @@ class TestRunCommand:
         result = runner.invoke(app, ["run", "--out", str(out), "--false-trigger-rate", "1.0"])
         assert result.exit_code == 0, result.output
 
+    def test_run_rejects_wer_above_one(self, tmp_path: Path) -> None:
+        # Rates above 1.0 used to crash inside `_inject_wer` with an
+        # IndexError; the CLI now refuses them with a clear typer error.
+        out = tmp_path / "REPORT.md"
+        result = runner.invoke(
+            app, ["run", "--out", str(out), "--wer-substitution-rate", "1.5"]
+        )
+        assert result.exit_code != 0
+        assert "0.0, 1.0" in result.output
+
+    def test_run_rejects_negative_wer(self, tmp_path: Path) -> None:
+        out = tmp_path / "REPORT.md"
+        result = runner.invoke(
+            app, ["run", "--out", str(out), "--wer-substitution-rate", "-0.1"]
+        )
+        assert result.exit_code != 0
+        assert "0.0, 1.0" in result.output
+
 
 class TestListCommand:
     def test_list_outputs_each_conversation(self) -> None:
