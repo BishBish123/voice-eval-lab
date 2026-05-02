@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 import pytest
 
 from voice_eval_lab.eval.golden import default_golden_set
+from voice_eval_lab.eval.metrics import score_conversation
 from voice_eval_lab.models import (
     Conversation,
     ConversationRun,
@@ -209,6 +210,70 @@ class TestStreamingLLM:
         async for chunk in llm.stream(history=[], last_user_text="hi", gold_facts=[]):
             chunks.append(chunk)
         assert chunks
+
+
+class TestMockLLMMatching:
+    """The match heuristic must be tolerant of cosmetic phrasing differences."""
+
+    async def test_mock_llm_matches_underscore_to_space(self) -> None:
+        llm = MockLLM()
+        text, _ = await llm.reply(
+            history=[],
+            last_user_text="explain ef search in hnsw",  # space form
+            gold_facts=[
+                "ef_search controls the size of the dynamic candidate list at query time.",
+            ],
+        )
+        # Match found -> reply is the gold fact verbatim, not the hedge.
+        assert text.startswith("ef_search controls")
+
+    async def test_mock_llm_matches_case_insensitive(self) -> None:
+        llm = MockLLM()
+        text, _ = await llm.reply(
+            history=[],
+            last_user_text="QUIZ ME ON POSTGRES REPLICATION",
+            gold_facts=[
+                "Physical replication ships WAL bytes; logical replication ships row-level changes.",
+            ],
+        )
+        assert text.startswith("Physical replication")
+
+    async def test_mock_llm_matches_unicode_normalized(self) -> None:
+        llm = MockLLM()
+        # NFKC fold: fullwidth Latin letters should normalize to ASCII so
+        # the user transcript "fullwidth ef" matches "ef_search" in the
+        # gold fact. The fullwidth glyphs below are intentional.
+        fullwidth = "explain ｅｆ search"  # noqa: RUF001
+        text, _ = await llm.reply(
+            history=[],
+            last_user_text=fullwidth,
+            gold_facts=[
+                "ef_search controls the size of the dynamic candidate list at query time.",
+            ],
+        )
+        assert text.startswith("ef_search controls")
+
+    async def test_mock_llm_falls_back_when_no_match(self) -> None:
+        # Sanity-check the regression direction — unrelated user text still
+        # falls back to the hedging reply.
+        llm = MockLLM()
+        text, _ = await llm.reply(
+            history=[],
+            last_user_text="completely unrelated topic here",
+            gold_facts=["Raft elects a leader by majority vote with randomized timeouts."],
+        )
+        assert "I don't have a confident answer" in text
+
+    async def test_hnsw_tuning_conversation_now_grounds(self) -> None:
+        # The bundled hnsw-tuning conversation phrases the lookup as
+        # "explain ef search" while the fact stores it as "ef_search".
+        # Faithfulness was 0% before the normalization fix; assert it's
+        # >0 now after re-running the conversation through the pipeline.
+        conv = next(c for c in default_golden_set() if c.conv_id == "hnsw-tuning")
+        pipeline = VoicePipeline(stt=MockSTT(), llm=MockLLM(), tts=MockTTS())
+        run = await pipeline.run(conv)
+        score = score_conversation(conv, run)
+        assert score.response_faithfulness > 0.0
 
 
 # ---------------------------------------------------------------------------

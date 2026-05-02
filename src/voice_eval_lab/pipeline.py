@@ -14,7 +14,9 @@ behind the same Protocol surface.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
+import unicodedata
 from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -85,7 +87,15 @@ class MockSTT:
 
 @dataclass
 class MockLLM:
-    """Returns a reply that mentions the first matching gold fact when present."""
+    """Returns a reply that mentions the first matching gold fact when present.
+
+    The matching heuristic is intentionally tolerant of cosmetic
+    differences between the user transcript and the gold fact:
+    case, underscore-vs-space (``ef_search`` vs ``ef search``), Unicode
+    NFKC variants, and runs of whitespace. The earlier raw-substring
+    check produced 0% faithfulness on conversations whose users phrased
+    fact tokens with spaces while the fact stored them with underscores.
+    """
 
     latency_ms: int = 120
 
@@ -95,12 +105,9 @@ class MockLLM:
         last_user_text: str,
         gold_facts: list[str],
     ) -> tuple[str, list[PipelineSpan]]:
+        user_tokens = _normalize_tokens(last_user_text)
         match = next(
-            (
-                f
-                for f in gold_facts
-                if any(w in last_user_text.lower() for w in f.lower().split()[:3])
-            ),
+            (f for f in gold_facts if _user_mentions_fact_lead(user_tokens, f)),
             None,
         )
         text = match if match else f"I don't have a confident answer about {last_user_text!r}."
@@ -358,6 +365,33 @@ def _user_turns(turns: Iterable[Turn]) -> Iterable[Turn]:
     for t in turns:
         if t.role is TurnRole.USER:
             yield t
+
+
+def _normalize_tokens(text: str) -> list[str]:
+    """Lowercase + NFKC-normalize + split on any non-letter/digit run.
+
+    Treats underscores, hyphens, punctuation, and whitespace as token
+    boundaries so ``ef_search``, ``ef-search``, and ``ef search`` all
+    produce the same token list. Empty tokens are dropped.
+    """
+    nfkc = unicodedata.normalize("NFKC", text)
+    return [t for t in re.split(r"[^A-Za-z0-9]+", nfkc.lower()) if t]
+
+
+def _user_mentions_fact_lead(user_tokens: list[str], fact: str) -> bool:
+    """True if any of the first three tokens of `fact` appear in `user_tokens`.
+
+    Match semantics mirror the original "any of fact's first 3 words is in
+    user text" heuristic, but on a normalized token list rather than raw
+    substring of the lowercase string. That fixes cosmetic mismatches like
+    ``ef_search`` vs ``ef search`` (different whitespace, same intent)
+    without changing which conversations match.
+    """
+    fact_lead = _normalize_tokens(fact)[:3]
+    if not fact_lead:
+        return False
+    user_set = set(user_tokens)
+    return any(tok in user_set for tok in fact_lead)
 
 
 def _inject_wer(text: str, sub_rate: float) -> str:
