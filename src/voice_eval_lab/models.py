@@ -110,9 +110,13 @@ class ConversationScore(BaseModel):
         default=0.0,
         description="Std-dev of first-byte latency across turns (ms).",
     )
-    endpointing_accuracy: float = Field(
+    endpointing_accuracy: float | None = Field(
         default=1.0,
-        description="Fraction of user turns where VAD end aligned with utterance end (±tolerance).",
+        description=(
+            "Fraction of user turns where VAD end aligned with utterance end (±tolerance). "
+            "None when no user turn produced a vad_end span (no signal — distinct from "
+            "0.0 which means every measured turn was misaligned)."
+        ),
     )
     llm_decisiveness: float = Field(
         default=1.0,
@@ -141,6 +145,12 @@ class EvalReport(BaseModel):
             "None when no conversation produced first-byte spans."
         ),
     )
-    aggregate_endpointing_accuracy: float = 1.0
+    aggregate_endpointing_accuracy: float | None = Field(
+        default=1.0,
+        description=(
+            "Mean of per-conversation endpointing scores, skipping conversations with no "
+            "VAD signal. None when no conversation produced any vad_end span."
+        ),
+    )
     aggregate_llm_decisiveness: float = 1.0
     per_conversation: list[ConversationScore]

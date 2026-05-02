@@ -164,9 +164,11 @@ class TestEndpointingAccuracy:
         run = ConversationRun(conv_id="c", topic="t", user_turns_played=0, turn_runs=[])
         assert endpointing_accuracy(conv, run) == 1.0
 
-    def test_user_turns_no_vad_spans_is_zero(self) -> None:
+    def test_endpointing_no_signal_is_none(self) -> None:
         # Pipeline emitted user turns but never produced a vad_end span on any
-        # of them — that's a broken VAD, not a perfect endpointing score.
+        # of them — that's "no measurement," distinct from "every measured
+        # turn was wrong." Returning 0.0 conflated the two and made a
+        # broken VAD invisible in the aggregate mean.
         conv = make_conv([make_user("u1", end=1000), make_user("u2", end=2000)])
         run = ConversationRun(
             conv_id="c",
@@ -177,7 +179,44 @@ class TestEndpointingAccuracy:
                 TurnRun(user_turn_index=1, transcribed_text="x", agent_reply="y", spans=[]),
             ],
         )
+        assert endpointing_accuracy(conv, run) is None
+
+    def test_endpointing_all_wrong_is_zero(self) -> None:
+        # VAD emitted on every turn but every one was outside tolerance.
+        # That's a measurable failure, not a no-signal case.
+        conv = make_conv(
+            [
+                make_user("u1", end=1000),
+                make_user("u2", start=1500, end=2500),
+            ]
+        )
+        run = make_run(
+            [
+                make_turn_run(vad_end_ms=1300, first_byte_ms=1400),  # off by 300
+                make_turn_run(vad_end_ms=2900, first_byte_ms=3000),  # off by 400
+            ]
+        )
         assert endpointing_accuracy(conv, run) == 0.0
+
+    def test_endpointing_aggregate_skips_no_signal(self) -> None:
+        # One conversation reports None (broken VAD); the other reports 1.0.
+        # Aggregate must be 1.0, not (1.0 + 0)/2 = 0.5.
+        conv_good = make_conv([make_user("good", end=1000)], conv_id="good")
+        run_good = make_run(
+            [make_turn_run(vad_end_ms=1000, first_byte_ms=1100)],
+            conv_id="good",
+        )
+        conv_broken = make_conv([make_user("broken", end=2000)], conv_id="broken")
+        run_broken = ConversationRun(
+            conv_id="broken",
+            topic="t",
+            user_turns_played=1,
+            turn_runs=[
+                TurnRun(user_turn_index=0, transcribed_text="x", agent_reply="y", spans=[]),
+            ],
+        )
+        report = score_run([(conv_good, run_good), (conv_broken, run_broken)])
+        assert report.aggregate_endpointing_accuracy == 1.0
 
     def test_user_turns_with_vad_spans_uses_real_math(self) -> None:
         # Sanity-check that the existing math still runs when a VAD signal

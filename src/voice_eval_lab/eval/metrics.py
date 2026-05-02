@@ -208,20 +208,25 @@ def tts_first_byte_jitter_ms(run: ConversationRun) -> float:
 
 def endpointing_accuracy(
     conversation: Conversation, run: ConversationRun, tolerance_ms: int = 50
-) -> float:
+) -> float | None:
     """Fraction of user turns where VAD-end aligned with the gold utterance end.
 
-    Three cases:
+    Four cases:
 
     - No user turns at all → 1.0 (vacuously true; nothing to be wrong about).
-    - User turns exist but zero produced a measurable `vad_end` span → 0.0.
-      The metric used to return 1.0 here, which silently turned a broken
-      pipeline (no VAD signal whatsoever) into a perfect score.
+    - User turns exist but zero produced a measurable `vad_end` span → None.
+      A pipeline with no VAD signal at all is "no measurement," not "every
+      measured turn was wrong" — the latter is what 0.0 should mean. Mixing
+      the two cases lets a broken VAD silently disappear into the aggregate
+      mean instead of standing out as missing data.
+    - User turns exist with measurable VAD ends but every one was outside
+      tolerance → 0.0.
     - User turns exist with measurable VAD ends → fraction within tolerance.
 
     The mock pipeline always lines them up exactly so the headline value
     is 1.0; the metric exists so a real pipeline (whose VAD will be early
-    or late) gets scored on a known axis.
+    or late) gets scored on a known axis. The aggregator skips `None`
+    entries so a single broken conversation can't drag the headline.
     """
     user_turns = [t for t in conversation.turns if t.role is TurnRole.USER]
     if not user_turns:
@@ -237,8 +242,8 @@ def endpointing_accuracy(
             aligned += 1
     if counted == 0:
         # User turns existed but the pipeline emitted no VAD-end spans —
-        # treat as "no signal" rather than a perfect score.
-        return 0.0
+        # explicit "no signal" rather than a 0.0 / 1.0 conflation.
+        return None
     return aligned / counted
 
 
@@ -300,6 +305,7 @@ def score_run(pairs: list[tuple[Conversation, ConversationRun]]) -> EvalReport:
             aggregate_false_trigger_rate=0.0,
             aggregate_barge_in_latency_p95_ms=None,
             aggregate_tts_first_byte_jitter_ms=None,
+            aggregate_endpointing_accuracy=None,
             per_conversation=[],
         )
 
@@ -342,12 +348,20 @@ def score_run(pairs: list[tuple[Conversation, ConversationRun]]) -> EvalReport:
         aggregate_false_trigger_rate=sum(s.false_trigger_rate for s in per_conv) / len(per_conv),
         aggregate_barge_in_latency_p95_ms=agg_barge_p95,
         aggregate_tts_first_byte_jitter_ms=agg_jitter,
-        aggregate_endpointing_accuracy=(
-            sum(s.endpointing_accuracy for s in per_conv) / len(per_conv)
+        aggregate_endpointing_accuracy=_mean_or_none(
+            [s.endpointing_accuracy for s in per_conv]
         ),
         aggregate_llm_decisiveness=(sum(s.llm_decisiveness for s in per_conv) / len(per_conv)),
         per_conversation=per_conv,
     )
+
+
+def _mean_or_none(values: list[float | None]) -> float | None:
+    """Mean of `values`, skipping None entries; returns None when no signal at all."""
+    measured = [v for v in values if v is not None]
+    if not measured:
+        return None
+    return sum(measured) / len(measured)
 
 
 def render_report(report: EvalReport) -> str:
@@ -379,7 +393,12 @@ def render_report(report: EvalReport) -> str:
         else f"{report.aggregate_tts_first_byte_jitter_ms:.1f}"
     )
     lines.append(f"| TTS first-byte jitter (ms) | {jitter_cell} |")
-    lines.append(f"| Endpointing accuracy (mean) | {report.aggregate_endpointing_accuracy:.2%} |")
+    endpoint_cell = (
+        "n/a"
+        if report.aggregate_endpointing_accuracy is None
+        else f"{report.aggregate_endpointing_accuracy:.2%}"
+    )
+    lines.append(f"| Endpointing accuracy (mean) | {endpoint_cell} |")
     lines.append(f"| LLM decisiveness (mean) | {report.aggregate_llm_decisiveness:.2%} |")
     lines.append("")
     lines.append("## Per conversation")
@@ -390,12 +409,15 @@ def render_report(report: EvalReport) -> str:
     )
     lines.append("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
     for s in report.per_conversation:
+        endpoint = (
+            "n/a" if s.endpointing_accuracy is None else f"{s.endpointing_accuracy:.2%}"
+        )
         lines.append(
             f"| {s.conv_id} | {s.topic} | "
             f"{s.turn_latency.p95_ms:.0f} | {s.transcription_wer:.2%} | "
             f"{s.response_faithfulness:.2%} | {s.barge_in_success_rate:.2%} | "
             f"{s.false_trigger_rate:.2%} | {s.barge_in_latency_p95_ms:.0f} | "
-            f"{s.tts_first_byte_jitter_ms:.1f} | {s.endpointing_accuracy:.2%} | "
+            f"{s.tts_first_byte_jitter_ms:.1f} | {endpoint} | "
             f"{s.llm_decisiveness:.2%} |"
         )
     return "\n".join(lines) + "\n"
@@ -442,11 +464,19 @@ def render_report_html(report: EvalReport) -> str:
             if report.aggregate_tts_first_byte_jitter_ms is None
             else f"{report.aggregate_tts_first_byte_jitter_ms:.1f}",
         ),
-        row("Endpointing accuracy (mean)", f"{report.aggregate_endpointing_accuracy:.2%}"),
+        row(
+            "Endpointing accuracy (mean)",
+            "n/a"
+            if report.aggregate_endpointing_accuracy is None
+            else f"{report.aggregate_endpointing_accuracy:.2%}",
+        ),
         row("LLM decisiveness (mean)", f"{report.aggregate_llm_decisiveness:.2%}"),
     ]
     per_conv_rows = []
     for s in report.per_conversation:
+        endpoint = (
+            "n/a" if s.endpointing_accuracy is None else f"{s.endpointing_accuracy:.2%}"
+        )
         per_conv_rows.append(
             "    <tr>"
             f"<td>{esc(s.conv_id)}</td>"
@@ -458,7 +488,7 @@ def render_report_html(report: EvalReport) -> str:
             f"<td class='num'>{s.false_trigger_rate:.2%}</td>"
             f"<td class='num'>{s.barge_in_latency_p95_ms:.0f}</td>"
             f"<td class='num'>{s.tts_first_byte_jitter_ms:.1f}</td>"
-            f"<td class='num'>{s.endpointing_accuracy:.2%}</td>"
+            f"<td class='num'>{endpoint}</td>"
             f"<td class='num'>{s.llm_decisiveness:.2%}</td>"
             "</tr>"
         )
