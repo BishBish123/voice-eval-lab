@@ -46,10 +46,10 @@ signature and the same metric semantics.
 
 - **>80%** target. Below 70% means the LLM is hallucinating answers
   that the gold-fact set could ground if the prompt was right.
-- The bundled mock LLM produces **~57%** because it's wired to
-  surface only the first-matching gold fact (and several conversations
-  in the golden set have no gold facts to match at all, which counts
-  as zero-signal — see the per-conversation table for the breakdown).
+- The bundled mock LLM produces **~62%** because it's wired to
+  surface only the first-matching gold fact, so multi-turn conversations
+  in the golden set leave later turns ungrounded — see the
+  per-conversation table for the breakdown.
 
 ### Barge-in success (corpus-pooled)
 
@@ -118,8 +118,10 @@ excluded from the denominator. Empty replies count as hedging.
   answer is a calibration bug, not graceful uncertainty.
 - The bundled mock LLM hits **57%** because the `agent-led-debug`
   conversation contains a turn ("idk") that forces the fallback,
-  and the `prom-burn-rate` conversation triggers it on a topic the
-  mock can't ground.
+  and several other conversations (`hnsw-tuning`, `empty-noise`,
+  `noisy-vad`, `double-barge`) have at least one turn the mock
+  can't ground, falling back to the `I don't have a confident
+  answer about ...` reply.
 
 ## What to do when a metric regresses
 

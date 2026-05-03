@@ -7,13 +7,13 @@
     "n": 15
   },
   "aggregate_wer": 0.0,
-  "aggregate_faithfulness": 0.5714285714285714,
+  "aggregate_faithfulness": 0.6153846153846154,
   "aggregate_barge_in_success": 1.0,
   "aggregate_false_trigger_rate": 0.0,
   "aggregate_barge_in_latency_p95_ms": 100.0,
   "aggregate_tts_first_byte_jitter_ms": 0.0,
   "aggregate_endpointing_accuracy": 1.0,
-  "aggregate_llm_decisiveness": 0.5333333333333333,
+  "aggregate_llm_decisiveness": 0.5714285714285714,
   "per_conversation": [
     {
       "conv_id": "postgres-replication",
@@ -115,13 +115,13 @@
         "n": 3
       },
       "transcription_wer": 0.0,
-      "response_faithfulness": 0.3333333333333333,
+      "response_faithfulness": 0.5,
       "barge_in_success_rate": 1.0,
       "false_trigger_rate": 0.0,
       "barge_in_latency_p95_ms": 0.0,
       "tts_first_byte_jitter_ms": 0.0,
       "endpointing_accuracy": 1.0,
-      "llm_decisiveness": 0.3333333333333333
+      "llm_decisiveness": 0.5
     },
     {
       "conv_id": "double-barge",

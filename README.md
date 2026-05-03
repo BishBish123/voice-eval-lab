@@ -88,13 +88,13 @@ Produces (with the bundled mock pipeline + golden set):
 | Conversations | 7 |
 | Turn latency p50 / p95 / p99 (ms) | 275 / 275 / 275 |
 | Transcription WER (corpus-pooled) | 0.00% |
-| Response faithfulness (pooled) | 57.14% |
+| Response faithfulness (pooled) | 61.54% |
 | Barge-in success (pooled) | 100.00% |
 | False-trigger rate (pooled) | 0.00% |
 | Barge-in yield p95 (ms) | 100 |
 | TTS first-byte jitter (ms) | 0.0 |
 | Endpointing accuracy (pooled) | 100.00% |
-| LLM decisiveness (pooled) | 53.33% |
+| LLM decisiveness (pooled) | 57.14% |
 
 The mock STT is lossless by construction, so the canonical run
 reports 0% WER. To exercise the WER metric path, inject substitutions
@@ -184,6 +184,13 @@ uv run voice-eval list
 uv run voice-eval baseline --save evals/baseline.json
 uv run voice-eval compare --baseline evals/baseline.json
 
+# Override per-metric regression tolerances via a JSON config. All 9
+# keys are optional; any key omitted falls back to the matching
+# --latency-p95-ms / --wer / --faithfulness CLI flag (or the library
+# default for the other six metrics).
+uv run voice-eval compare --baseline evals/baseline.json \
+    --thresholds-config evals/thresholds.json
+
 # Re-render the latest scores as HTML. `render` reads JSON, not
 # markdown — make sure the previous `run` was invoked with --json so
 # evals/scores.json exists.
@@ -196,6 +203,24 @@ uv run voice-eval render --from evals/scores.json --out evals/REPORT.html --form
 > not a render input — re-running `render` against a markdown file
 > will not work. If `evals/scores.json` is missing, run `voice-eval
 > run --json evals/scores.json` first.
+
+The `--thresholds-config` JSON file accepts these 9 keys (all
+optional; values must be numeric — latency/jitter values in ms,
+the rest are 0..1 fractions):
+
+```json
+{
+  "latency_p95_ms": 10.0,
+  "wer": 0.02,
+  "faithfulness": 0.05,
+  "barge_in": 0.05,
+  "false_trigger": 0.02,
+  "barge_in_latency_p95_ms": 25.0,
+  "tts_first_byte_jitter_ms": 5.0,
+  "endpointing": 0.02,
+  "decisiveness": 0.05
+}
+```
 
 ## Plug in real adapters
 

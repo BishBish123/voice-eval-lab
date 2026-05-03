@@ -115,8 +115,12 @@ def _assert_no_symlink_ancestor(path: Path) -> None:
     """
     for parent in path.parents:
         if parent.is_symlink():
+            resolved_parent = parent.resolve()
+            suggested = path.resolve()
             raise typer.BadParameter(
-                f"refusing to write: parent directory is a symlink: {parent}"
+                f"refusing to write: parent directory is a symlink: {parent} "
+                f"-> {resolved_parent} (suggested workaround: pass the resolved "
+                f"path instead, e.g. {suggested})"
             )
 
 
