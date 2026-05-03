@@ -95,6 +95,15 @@ class TestFaithfulnessEdges:
         )
         assert response_faithfulness(conv, run) == 0.5
 
+    def test_faithfulness_handles_unicode_variants(self) -> None:
+        # Decomposed-form "café" (e + COMBINING ACUTE) should match the
+        # composed-form gold fact after NFKC normalization.
+        composed = "the café is open"
+        decomposed = "The café is open!"  # e + U+0301
+        conv = make_conv([make_user("u")], gold=[composed])
+        run = make_run([make_turn_run(reply=decomposed)])
+        assert response_faithfulness(conv, run) == 1.0
+
 
 # ---------------------------------------------------------------------------
 # Latency edge cases + percentile ordering

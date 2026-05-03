@@ -295,6 +295,27 @@ class TestLLMDecisiveness:
         run = ConversationRun(conv_id="c", topic="t", user_turns_played=0, turn_runs=[])
         assert llm_decisiveness(run) == 1.0
 
+    def test_decisiveness_catches_likely_probably(self) -> None:
+        # Single-token hedges that the original phrase list missed —
+        # word-boundary regex catches them without matching inside
+        # unrelated tokens.
+        run = make_run(
+            [
+                make_turn_run(reply="The result is likely correct."),
+                make_turn_run(reply="It's probably the LLM."),
+                make_turn_run(reply="Could be the network."),
+                make_turn_run(reply="The answer is 42."),
+            ]
+        )
+        # Three of four hedge; only one decisive.
+        assert llm_decisiveness(run) == pytest.approx(1 / 4)
+
+    def test_decisiveness_word_boundary_does_not_match_inside_tokens(self) -> None:
+        # "biweekly" contains the substring "weekly" but no hedge token —
+        # the regex must use \b anchors so it doesn't false-fire.
+        run = make_run([make_turn_run(reply="The deploy runs biweekly.")])
+        assert llm_decisiveness(run) == 1.0
+
 
 # ---------------------------------------------------------------------------
 # Property-style checks: monotonicity invariants

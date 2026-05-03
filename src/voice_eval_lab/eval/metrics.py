@@ -30,6 +30,8 @@ from __future__ import annotations
 
 import html
 import math
+import re
+import unicodedata
 
 import jiwer
 import numpy as np
@@ -45,7 +47,7 @@ from voice_eval_lab.models import (
     TurnRun,
 )
 
-HEDGING_PHRASES = (
+HEDGING_PHRASES: tuple[str, ...] = (
     "i don't have a confident answer",
     "i'm not sure",
     "i don't know",
@@ -55,6 +57,39 @@ HEDGING_PHRASES = (
     "could be",
     "i can't say",
 )
+
+# Single-token hedge words detected via word-boundary regex so they don't
+# match inside other tokens (e.g. "likely" should not count toward the
+# noun "biweekly"). Module-level so callers can extend the list without
+# touching the metric internals.
+HEDGE_WORDS: tuple[str, ...] = (
+    "likely",
+    "probably",
+    "probable",
+    "possibly",
+    "maybe",
+    "could",
+    "might",
+    "seems",
+    "appears",
+    "believe",
+    "suspect",
+)
+_HEDGE_WORD_RE = re.compile(
+    r"\b(" + "|".join(re.escape(w) for w in HEDGE_WORDS) + r")\b"
+)
+
+
+def _normalize_text(text: str) -> str:
+    """NFKC-fold then lowercase for substring comparisons.
+
+    Faithfulness and decisiveness compare gold facts and replies as
+    text. Without NFKC the same logical word (e.g. fullwidth ASCII or
+    composed-vs-decomposed accented forms) reads as different bytes
+    and silently fails to match. Lowercase is applied after NFKC so the
+    comparison is genuinely case-insensitive on every glyph.
+    """
+    return unicodedata.normalize("NFKC", text).lower()
 
 
 class IncompleteRunError(ValueError):
@@ -109,17 +144,23 @@ def transcription_wer(conversation: Conversation, run: ConversationRun) -> float
 def response_faithfulness(conversation: Conversation, run: ConversationRun) -> float:
     """Fraction of agent replies that quote at least one gold fact substring.
 
+    Both sides are NFKC-normalized + lowercased before comparison so
+    cosmetic Unicode variants (fullwidth ASCII, composed vs decomposed
+    accents) don't silently miss a match.
+
     Proxy until an LLM judge is plugged in via the same Protocol.
     """
     if not conversation.gold_facts:
         return 1.0  # nothing to disagree with
+    normalized_facts = [_normalize_text(f) for f in conversation.gold_facts]
     score = 0.0
     n = 0
     for tr in run.turn_runs:
         if tr.false_trigger:
             continue
         n += 1
-        if any(fact.lower() in tr.agent_reply.lower() for fact in conversation.gold_facts):
+        reply = _normalize_text(tr.agent_reply)
+        if any(fact in reply for fact in normalized_facts):
             score += 1.0
     return score / n if n else 0.0
 
@@ -252,6 +293,12 @@ def llm_decisiveness(run: ConversationRun) -> float:
 
     False-trigger turns are excluded — the agent is *supposed* to dodge
     those. Empty replies count as hedging (no signal = no commitment).
+
+    Hedging is detected in two passes:
+    - long phrases via NFKC-normalized substring (``HEDGING_PHRASES``)
+    - single-token hedge words (``likely``, ``probably``, ...) via a
+      word-boundary regex so substrings inside unrelated tokens don't
+      count.
     """
     counted = 0
     decisive = 0
@@ -259,10 +306,12 @@ def llm_decisiveness(run: ConversationRun) -> float:
         if tr.false_trigger:
             continue
         counted += 1
-        reply = tr.agent_reply.lower()
+        reply = _normalize_text(tr.agent_reply)
         if not reply.strip():
             continue
         if any(phrase in reply for phrase in HEDGING_PHRASES):
+            continue
+        if _HEDGE_WORD_RE.search(reply):
             continue
         decisive += 1
     if counted == 0:
