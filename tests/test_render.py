@@ -186,6 +186,23 @@ def _report_with_conv(conv_id: str = "x", topic: str = "topic-x") -> EvalReport:
     )
 
 
+class TestMarkdownEscape:
+    def test_markdown_renderer_escapes_pipe_in_conv_id(self) -> None:
+        # A bare `|` inside a conv_id used to break the markdown table
+        # layout — every cell after it slid one column left.
+        out = render_report(_report_with_conv(conv_id="evil|conv", topic="t"))
+        # Pipe is escaped with a backslash; the raw bare pipe never appears
+        # outside the table separators.
+        assert "evil\\|conv" in out
+
+    def test_markdown_renderer_replaces_newlines_in_topic(self) -> None:
+        out = render_report(_report_with_conv(conv_id="x", topic="line1\nline2"))
+        # Newline must be replaced with a space so the table row stays intact.
+        assert "line1 line2" in out
+        # Original embedded newline cannot appear inside the row.
+        assert "line1\nline2" not in out
+
+
 class TestHTMLEscape:
     def test_html_escapes_conv_id(self) -> None:
         out = render_report_html(_report_with_conv(conv_id="<script>alert(1)</script>"))

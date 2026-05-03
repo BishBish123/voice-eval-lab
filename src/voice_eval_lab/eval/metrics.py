@@ -462,7 +462,7 @@ def render_report(report: EvalReport) -> str:
             "n/a" if s.endpointing_accuracy is None else f"{s.endpointing_accuracy:.2%}"
         )
         lines.append(
-            f"| {s.conv_id} | {s.topic} | "
+            f"| {_md_cell(s.conv_id)} | {_md_cell(s.topic)} | "
             f"{s.turn_latency.p95_ms:.0f} | {s.transcription_wer:.2%} | "
             f"{s.response_faithfulness:.2%} | {s.barge_in_success_rate:.2%} | "
             f"{s.false_trigger_rate:.2%} | {s.barge_in_latency_p95_ms:.0f} | "
@@ -470,6 +470,27 @@ def render_report(report: EvalReport) -> str:
             f"{s.llm_decisiveness:.2%} |"
         )
     return "\n".join(lines) + "\n"
+
+
+def _md_cell(value: str) -> str:
+    """Escape characters that would corrupt a Markdown table row.
+
+    A pipe (``|``) ends the cell, a newline ends the row, a backslash
+    can leak into rendered output, and HTML-ish tokens (``<``, ``>``)
+    let renderers that allow inline HTML (CommonMark "lenient" mode,
+    GitHub-flavored Markdown) treat the cell as live HTML. None of
+    those are useful inside a metric report — escape them all.
+    """
+    if not value:
+        return value
+    escaped = (
+        value.replace("\\", "\\\\")
+        .replace("|", "\\|")
+        .replace("\r\n", " ")
+        .replace("\n", " ")
+        .replace("\r", " ")
+    )
+    return html.escape(escaped, quote=False)
 
 
 def render_report_html(report: EvalReport) -> str:
