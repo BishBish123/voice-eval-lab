@@ -551,6 +551,46 @@ class TestTurnCoverage:
 # ---------------------------------------------------------------------------
 
 
+class TestAggregateBargeInSuccessPooled:
+    def test_aggregate_barge_in_pools_interrupted_turns(self) -> None:
+        # Three conversations: two with no interrupts (used to inflate the
+        # mean to 1.0 for free), one with two interrupts where one fails.
+        # Old mean would be (1.0 + 1.0 + 0.5) / 3 = 0.833; pooled is 1/2 = 0.5.
+        conv_quiet1 = make_conv([make_user("a")], conv_id="q1")
+        conv_quiet2 = make_conv([make_user("b")], conv_id="q2")
+        conv_interrupt = make_conv(
+            [
+                make_user("c", interrupted=True),
+                make_user("d", start=2000, end=3000, interrupted=True),
+            ],
+            conv_id="i",
+        )
+        run_quiet1 = make_run([make_turn_run()], conv_id="q1")
+        run_quiet2 = make_run([make_turn_run()], conv_id="q2")
+        # First yield 50ms (under default 100ms budget — success), second 200ms (fail).
+        run_interrupt = make_run(
+            [
+                make_turn_run(interrupted=True, barge_yield_ms=50),
+                make_turn_run(interrupted=True, barge_yield_ms=200, user_turn_index=1),
+            ],
+            conv_id="i",
+        )
+        report = score_run(
+            [(conv_quiet1, run_quiet1), (conv_quiet2, run_quiet2), (conv_interrupt, run_interrupt)]
+        )
+        assert report.aggregate_barge_in_success == pytest.approx(0.5)
+
+    def test_aggregate_barge_in_returns_none_on_no_signal(self) -> None:
+        # No conversation has any interrupted turns at all — there's no
+        # signal, so the pooled aggregate is None (distinct from 1.0).
+        conv_a = make_conv([make_user("a")], conv_id="a")
+        conv_b = make_conv([make_user("b")], conv_id="b")
+        run_a = make_run([make_turn_run()], conv_id="a")
+        run_b = make_run([make_turn_run()], conv_id="b")
+        report = score_run([(conv_a, run_a), (conv_b, run_b)])
+        assert report.aggregate_barge_in_success is None
+
+
 class TestAggregateWERCorpusPool:
     def test_aggregate_wer_uses_corpus_pool(self) -> None:
         # Two conversations: one short conversation at 0% WER and one long

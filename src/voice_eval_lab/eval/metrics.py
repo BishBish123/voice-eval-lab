@@ -168,6 +168,34 @@ def response_faithfulness(conversation: Conversation, run: ConversationRun) -> f
 DEFAULT_BARGE_IN_BUDGET_MS = 200
 
 
+def _barge_in_counts(
+    conversation: Conversation,
+    run: ConversationRun,
+    barge_in_budget_ms: int,
+) -> tuple[int, int]:
+    """Return (successful_interrupted_turns, total_interrupted_turns).
+
+    Used both for the per-conversation rate and to pool numerators /
+    denominators across the run.
+    """
+    user_turns = [t for t in conversation.turns if t.role is TurnRole.USER]
+    interruptible = [t for t in user_turns if t.interrupted]
+    if not interruptible:
+        return 0, 0
+    yielded = 0
+    for ut in interruptible:
+        idx = user_turns.index(ut)
+        if idx >= len(run.turn_runs):
+            continue
+        tr = run.turn_runs[idx]
+        yield_span = _find_span(tr.spans, "barge_in.yield")
+        if yield_span is None:
+            continue
+        if (yield_span.ended_at_ms - yield_span.started_at_ms) <= barge_in_budget_ms:
+            yielded += 1
+    return yielded, len(interruptible)
+
+
 def barge_in_success_rate(
     conversation: Conversation,
     run: ConversationRun,
@@ -183,22 +211,10 @@ def barge_in_success_rate(
 
     Returns 1.0 when there are no interrupted user turns (vacuously true).
     """
-    user_turns = [t for t in conversation.turns if t.role is TurnRole.USER]
-    interruptible = [t for t in user_turns if t.interrupted]
-    if not interruptible:
+    yielded, total = _barge_in_counts(conversation, run, barge_in_budget_ms)
+    if total == 0:
         return 1.0
-    yielded = 0
-    for ut in interruptible:
-        idx = user_turns.index(ut)
-        if idx >= len(run.turn_runs):
-            continue
-        tr = run.turn_runs[idx]
-        yield_span = _find_span(tr.spans, "barge_in.yield")
-        if yield_span is None:
-            continue
-        if (yield_span.ended_at_ms - yield_span.started_at_ms) <= barge_in_budget_ms:
-            yielded += 1
-    return yielded / len(interruptible)
+    return yielded / total
 
 
 def false_trigger_rate(run: ConversationRun) -> float:
@@ -324,7 +340,12 @@ def llm_decisiveness(run: ConversationRun) -> float:
 # ---------------------------------------------------------------------------
 
 
-def score_conversation(conversation: Conversation, run: ConversationRun) -> ConversationScore:
+def score_conversation(
+    conversation: Conversation,
+    run: ConversationRun,
+    *,
+    barge_in_budget_ms: int = DEFAULT_BARGE_IN_BUDGET_MS,
+) -> ConversationScore:
     _check_turn_coverage(conversation, run)
     return ConversationScore(
         conv_id=conversation.conv_id,
@@ -332,7 +353,9 @@ def score_conversation(conversation: Conversation, run: ConversationRun) -> Conv
         turn_latency=turn_latency_stats(run.turn_runs),
         transcription_wer=transcription_wer(conversation, run),
         response_faithfulness=response_faithfulness(conversation, run),
-        barge_in_success_rate=barge_in_success_rate(conversation, run),
+        barge_in_success_rate=barge_in_success_rate(
+            conversation, run, barge_in_budget_ms=barge_in_budget_ms
+        ),
         false_trigger_rate=false_trigger_rate(run),
         barge_in_latency_p95_ms=barge_in_latency_p95_ms(run),
         tts_first_byte_jitter_ms=tts_first_byte_jitter_ms(run),
@@ -350,16 +373,33 @@ class _RunPool:
     keeps `score_run` from sprouting nested branches per metric.
     """
 
-    __slots__ = ("barge_yields", "latencies", "wer_hyps", "wer_refs")
+    __slots__ = (
+        "barge_in_total",
+        "barge_in_yielded",
+        "barge_yields",
+        "latencies",
+        "wer_hyps",
+        "wer_refs",
+    )
 
     def __init__(self) -> None:
         self.latencies: list[float] = []
         self.barge_yields: list[float] = []
         self.wer_refs: list[str] = []
         self.wer_hyps: list[str] = []
+        # Numerator/denominator pool for the aggregate barge-in success
+        # rate. Mean-of-per-conversation gives 1.0 to every conversation
+        # with no interrupts and dilutes the headline; the pooled ratio
+        # reflects only conversations that actually exercised barge-in.
+        self.barge_in_yielded: int = 0
+        self.barge_in_total: int = 0
 
 
-def _pool_run_samples(pairs: list[tuple[Conversation, ConversationRun]]) -> _RunPool:
+def _pool_run_samples(
+    pairs: list[tuple[Conversation, ConversationRun]],
+    *,
+    barge_in_budget_ms: int,
+) -> _RunPool:
     pool = _RunPool()
     for c, r in pairs:
         user_turns = [t for t in c.turns if t.role is TurnRole.USER]
@@ -375,11 +415,31 @@ def _pool_run_samples(pairs: list[tuple[Conversation, ConversationRun]]) -> _Run
             for s in tr.spans:
                 if s.name == "barge_in.yield":
                     pool.barge_yields.append(float(s.ended_at_ms - s.started_at_ms))
+        yielded, total = _barge_in_counts(c, r, barge_in_budget_ms)
+        pool.barge_in_yielded += yielded
+        pool.barge_in_total += total
     return pool
 
 
-def score_run(pairs: list[tuple[Conversation, ConversationRun]]) -> EvalReport:
-    per_conv = [score_conversation(c, r) for c, r in pairs]
+DEFAULT_PIPELINE_BARGE_IN_BUDGET_MS = 100
+"""Canonical pipeline barge-in budget (matches `VoicePipeline.barge_in_yield_ms`).
+
+The metric and the pipeline used to disagree: the pipeline shipped a
+100ms yield while the metric scored against a 200ms budget, so a 150ms
+yield was "success" by the metric and 50ms over budget by contract.
+score_run() defaults to this constant; callers that run the pipeline
+with a different budget pass it through explicitly.
+"""
+
+
+def score_run(
+    pairs: list[tuple[Conversation, ConversationRun]],
+    *,
+    barge_in_budget_ms: int = DEFAULT_PIPELINE_BARGE_IN_BUDGET_MS,
+) -> EvalReport:
+    per_conv = [
+        score_conversation(c, r, barge_in_budget_ms=barge_in_budget_ms) for c, r in pairs
+    ]
     if not per_conv:
         empty = TurnLatencyStats(p50_ms=0.0, p95_ms=0.0, p99_ms=0.0, n=0)
         return EvalReport(
@@ -387,7 +447,7 @@ def score_run(pairs: list[tuple[Conversation, ConversationRun]]) -> EvalReport:
             aggregate_turn_latency=empty,
             aggregate_wer=0.0,
             aggregate_faithfulness=0.0,
-            aggregate_barge_in_success=0.0,
+            aggregate_barge_in_success=None,
             aggregate_false_trigger_rate=0.0,
             aggregate_barge_in_latency_p95_ms=None,
             aggregate_tts_first_byte_jitter_ms=None,
@@ -395,7 +455,7 @@ def score_run(pairs: list[tuple[Conversation, ConversationRun]]) -> EvalReport:
             per_conversation=[],
         )
 
-    pooled = _pool_run_samples(pairs)
+    pooled = _pool_run_samples(pairs, barge_in_budget_ms=barge_in_budget_ms)
     all_latencies = pooled.latencies
     all_barge_yields = pooled.barge_yields
     pooled_wer_refs = pooled.wer_refs
@@ -429,12 +489,24 @@ def score_run(pairs: list[tuple[Conversation, ConversationRun]]) -> EvalReport:
         float(jiwer.wer(pooled_wer_refs, pooled_wer_hyps)) if pooled_wer_refs else 0.0
     )
 
+    # Aggregate barge-in success rate pools numerators/denominators across
+    # the run. mean-of-per-conv treats every conversation with zero
+    # interrupts as 1.0 ("vacuously true") and dilutes any real failures
+    # in the few conversations that actually exercised barge-in. None
+    # when the entire run had no interrupts (no signal — same nullable
+    # pattern as endpointing).
+    agg_barge_in_success: float | None = (
+        pooled.barge_in_yielded / pooled.barge_in_total
+        if pooled.barge_in_total > 0
+        else None
+    )
+
     return EvalReport(
         n_conversations=len(per_conv),
         aggregate_turn_latency=_percentile_stats(all_latencies),
         aggregate_wer=agg_wer,
         aggregate_faithfulness=sum(s.response_faithfulness for s in per_conv) / len(per_conv),
-        aggregate_barge_in_success=sum(s.barge_in_success_rate for s in per_conv) / len(per_conv),
+        aggregate_barge_in_success=agg_barge_in_success,
         aggregate_false_trigger_rate=sum(s.false_trigger_rate for s in per_conv) / len(per_conv),
         aggregate_barge_in_latency_p95_ms=agg_barge_p95,
         aggregate_tts_first_byte_jitter_ms=agg_jitter,
@@ -469,7 +541,12 @@ def render_report(report: EvalReport) -> str:
     )
     lines.append(f"| Transcription WER (mean) | {report.aggregate_wer:.2%} |")
     lines.append(f"| Response faithfulness (mean) | {report.aggregate_faithfulness:.2%} |")
-    lines.append(f"| Barge-in success (mean) | {report.aggregate_barge_in_success:.2%} |")
+    barge_success_cell = (
+        "n/a"
+        if report.aggregate_barge_in_success is None
+        else f"{report.aggregate_barge_in_success:.2%}"
+    )
+    lines.append(f"| Barge-in success (pooled) | {barge_success_cell} |")
     lines.append(f"| False-trigger rate (mean) | {report.aggregate_false_trigger_rate:.2%} |")
     barge_p95_cell = (
         "n/a"
@@ -561,7 +638,12 @@ def render_report_html(report: EvalReport) -> str:
         ),
         row("Transcription WER (mean)", f"{report.aggregate_wer:.2%}"),
         row("Response faithfulness (mean)", f"{report.aggregate_faithfulness:.2%}"),
-        row("Barge-in success (mean)", f"{report.aggregate_barge_in_success:.2%}"),
+        row(
+            "Barge-in success (pooled)",
+            "n/a"
+            if report.aggregate_barge_in_success is None
+            else f"{report.aggregate_barge_in_success:.2%}",
+        ),
         row("False-trigger rate (mean)", f"{report.aggregate_false_trigger_rate:.2%}"),
         row(
             "Barge-in yield p95 (ms)",

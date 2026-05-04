@@ -131,7 +131,15 @@ class EvalReport(BaseModel):
     aggregate_turn_latency: TurnLatencyStats
     aggregate_wer: float
     aggregate_faithfulness: float
-    aggregate_barge_in_success: float
+    aggregate_barge_in_success: float | None = Field(
+        default=None,
+        description=(
+            "Pooled fraction of interrupted turns the pipeline yielded inside the budget, "
+            "computed as sum(yielded) / sum(interrupted) across the run. None when the "
+            "entire run had no interrupted turns (no signal — distinct from 1.0 which "
+            "means every interrupt was handled inside budget)."
+        ),
+    )
     aggregate_false_trigger_rate: float
     aggregate_barge_in_latency_p95_ms: float | None = Field(
         default=None,
