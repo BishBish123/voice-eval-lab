@@ -141,6 +141,31 @@ def transcription_wer(conversation: Conversation, run: ConversationRun) -> float
     return float(out)
 
 
+def _faithfulness_counts(
+    conversation: Conversation, run: ConversationRun
+) -> tuple[int, int]:
+    """Return (grounded_replies, total_replies_with_gold_facts).
+
+    Returns (0, 0) for conversations with no gold_facts — those are
+    vacuously faithful at the per-conversation layer but contribute
+    nothing to the pooled aggregate (no facts to be (un)grounded
+    against).
+    """
+    if not conversation.gold_facts:
+        return 0, 0
+    normalized_facts = [_normalize_text(f) for f in conversation.gold_facts]
+    grounded = 0
+    counted = 0
+    for tr in run.turn_runs:
+        if tr.false_trigger:
+            continue
+        counted += 1
+        reply = _normalize_text(tr.agent_reply)
+        if any(fact in reply for fact in normalized_facts):
+            grounded += 1
+    return grounded, counted
+
+
 def response_faithfulness(conversation: Conversation, run: ConversationRun) -> float:
     """Fraction of agent replies that quote at least one gold fact substring.
 
@@ -152,17 +177,8 @@ def response_faithfulness(conversation: Conversation, run: ConversationRun) -> f
     """
     if not conversation.gold_facts:
         return 1.0  # nothing to disagree with
-    normalized_facts = [_normalize_text(f) for f in conversation.gold_facts]
-    score = 0.0
-    n = 0
-    for tr in run.turn_runs:
-        if tr.false_trigger:
-            continue
-        n += 1
-        reply = _normalize_text(tr.agent_reply)
-        if any(fact in reply for fact in normalized_facts):
-            score += 1.0
-    return score / n if n else 0.0
+    grounded, counted = _faithfulness_counts(conversation, run)
+    return grounded / counted if counted else 0.0
 
 
 DEFAULT_BARGE_IN_BUDGET_MS = 200
@@ -217,10 +233,16 @@ def barge_in_success_rate(
     return yielded / total
 
 
+def _false_trigger_counts(run: ConversationRun) -> tuple[int, int]:
+    """Return (false_trigger_turns, total_turn_runs)."""
+    return sum(1 for tr in run.turn_runs if tr.false_trigger), len(run.turn_runs)
+
+
 def false_trigger_rate(run: ConversationRun) -> float:
-    if not run.turn_runs:
+    triggers, total = _false_trigger_counts(run)
+    if total == 0:
         return 0.0
-    return sum(1 for tr in run.turn_runs if tr.false_trigger) / len(run.turn_runs)
+    return triggers / total
 
 
 def barge_in_latency_p95_ms(run: ConversationRun) -> float:
@@ -263,6 +285,28 @@ def tts_first_byte_jitter_ms(run: ConversationRun) -> float:
     return math.sqrt(var)
 
 
+def _endpointing_counts(
+    conversation: Conversation, run: ConversationRun, tolerance_ms: int = 50
+) -> tuple[int, int]:
+    """Return (aligned_turns, measured_turns_with_vad_end).
+
+    Pooling these numerator/denominator counts across the run gives the
+    aggregate the right denominator: a long noisy conversation with 50
+    measured turns weighs 50x a 1-turn conversation, instead of 1x.
+    """
+    user_turns = [t for t in conversation.turns if t.role is TurnRole.USER]
+    aligned = 0
+    counted = 0
+    for ut, tr in zip(user_turns, run.turn_runs, strict=False):
+        vad = _find_span(tr.spans, "vad_end")
+        if vad is None:
+            continue
+        counted += 1
+        if abs(vad.ended_at_ms - ut.ended_at_ms) <= tolerance_ms:
+            aligned += 1
+    return aligned, counted
+
+
 def endpointing_accuracy(
     conversation: Conversation, run: ConversationRun, tolerance_ms: int = 50
 ) -> float | None:
@@ -288,15 +332,7 @@ def endpointing_accuracy(
     user_turns = [t for t in conversation.turns if t.role is TurnRole.USER]
     if not user_turns:
         return 1.0
-    aligned = 0
-    counted = 0
-    for ut, tr in zip(user_turns, run.turn_runs, strict=False):
-        vad = _find_span(tr.spans, "vad_end")
-        if vad is None:
-            continue
-        counted += 1
-        if abs(vad.ended_at_ms - ut.ended_at_ms) <= tolerance_ms:
-            aligned += 1
+    aligned, counted = _endpointing_counts(conversation, run, tolerance_ms)
     if counted == 0:
         # User turns existed but the pipeline emitted no VAD-end spans —
         # explicit "no signal" rather than a 0.0 / 1.0 conflation.
@@ -304,18 +340,8 @@ def endpointing_accuracy(
     return aligned / counted
 
 
-def llm_decisiveness(run: ConversationRun) -> float:
-    """Fraction of agent replies that don't contain a hedging phrase.
-
-    False-trigger turns are excluded — the agent is *supposed* to dodge
-    those. Empty replies count as hedging (no signal = no commitment).
-
-    Hedging is detected in two passes:
-    - long phrases via NFKC-normalized substring (``HEDGING_PHRASES``)
-    - single-token hedge words (``likely``, ``probably``, ...) via a
-      word-boundary regex so substrings inside unrelated tokens don't
-      count.
-    """
+def _decisiveness_counts(run: ConversationRun) -> tuple[int, int]:
+    """Return (decisive_replies, total_replies_excluding_false_triggers)."""
     counted = 0
     decisive = 0
     for tr in run.turn_runs:
@@ -330,6 +356,22 @@ def llm_decisiveness(run: ConversationRun) -> float:
         if _HEDGE_WORD_RE.search(reply):
             continue
         decisive += 1
+    return decisive, counted
+
+
+def llm_decisiveness(run: ConversationRun) -> float:
+    """Fraction of agent replies that don't contain a hedging phrase.
+
+    False-trigger turns are excluded — the agent is *supposed* to dodge
+    those. Empty replies count as hedging (no signal = no commitment).
+
+    Hedging is detected in two passes:
+    - long phrases via NFKC-normalized substring (``HEDGING_PHRASES``)
+    - single-token hedge words (``likely``, ``probably``, ...) via a
+      word-boundary regex so substrings inside unrelated tokens don't
+      count.
+    """
+    decisive, counted = _decisiveness_counts(run)
     if counted == 0:
         return 1.0
     return decisive / counted
@@ -377,6 +419,14 @@ class _RunPool:
         "barge_in_total",
         "barge_in_yielded",
         "barge_yields",
+        "decisive_replies",
+        "decisive_total",
+        "endpointing_aligned",
+        "endpointing_measured",
+        "false_trigger_total",
+        "false_trigger_turns",
+        "grounded_replies",
+        "grounded_total",
         "latencies",
         "wer_hyps",
         "wer_refs",
@@ -387,12 +437,20 @@ class _RunPool:
         self.barge_yields: list[float] = []
         self.wer_refs: list[str] = []
         self.wer_hyps: list[str] = []
-        # Numerator/denominator pool for the aggregate barge-in success
-        # rate. Mean-of-per-conversation gives 1.0 to every conversation
-        # with no interrupts and dilutes the headline; the pooled ratio
-        # reflects only conversations that actually exercised barge-in.
+        # Numerator/denominator pools. Each headline ratio aggregate is
+        # numerator-sum / denominator-sum across the run; the per-conv
+        # mean overweights short conversations and dilutes signal from
+        # the few that actually exercised the metric.
         self.barge_in_yielded: int = 0
         self.barge_in_total: int = 0
+        self.grounded_replies: int = 0
+        self.grounded_total: int = 0
+        self.false_trigger_turns: int = 0
+        self.false_trigger_total: int = 0
+        self.decisive_replies: int = 0
+        self.decisive_total: int = 0
+        self.endpointing_aligned: int = 0
+        self.endpointing_measured: int = 0
 
 
 def _pool_run_samples(
@@ -418,6 +476,18 @@ def _pool_run_samples(
         yielded, total = _barge_in_counts(c, r, barge_in_budget_ms)
         pool.barge_in_yielded += yielded
         pool.barge_in_total += total
+        grounded, ground_total = _faithfulness_counts(c, r)
+        pool.grounded_replies += grounded
+        pool.grounded_total += ground_total
+        ft_turns, ft_total = _false_trigger_counts(r)
+        pool.false_trigger_turns += ft_turns
+        pool.false_trigger_total += ft_total
+        decisive, dec_total = _decisiveness_counts(r)
+        pool.decisive_replies += decisive
+        pool.decisive_total += dec_total
+        aligned, measured = _endpointing_counts(c, r)
+        pool.endpointing_aligned += aligned
+        pool.endpointing_measured += measured
     return pool
 
 
@@ -446,12 +516,13 @@ def score_run(
             n_conversations=0,
             aggregate_turn_latency=empty,
             aggregate_wer=0.0,
-            aggregate_faithfulness=0.0,
+            aggregate_faithfulness=None,
             aggregate_barge_in_success=None,
-            aggregate_false_trigger_rate=0.0,
+            aggregate_false_trigger_rate=None,
             aggregate_barge_in_latency_p95_ms=None,
             aggregate_tts_first_byte_jitter_ms=None,
             aggregate_endpointing_accuracy=None,
+            aggregate_llm_decisiveness=None,
             per_conversation=[],
         )
 
@@ -501,29 +572,47 @@ def score_run(
         else None
     )
 
+    # Faithfulness, false-trigger, decisiveness, endpointing all share
+    # the same root cause as WER: their per-conversation denominators
+    # vary (1-turn vs 50-turn conversations), so the mean of per-conv
+    # scores is not the corpus-level rate. Pool numerators / denominators
+    # across the run; None when the entire run had no measurable signal
+    # (faithfulness with no gold facts anywhere, no replies at all,
+    # broken VAD on every turn).
+    agg_faithfulness: float | None = (
+        pooled.grounded_replies / pooled.grounded_total
+        if pooled.grounded_total > 0
+        else None
+    )
+    agg_false_trigger_rate: float | None = (
+        pooled.false_trigger_turns / pooled.false_trigger_total
+        if pooled.false_trigger_total > 0
+        else None
+    )
+    agg_decisiveness: float | None = (
+        pooled.decisive_replies / pooled.decisive_total
+        if pooled.decisive_total > 0
+        else None
+    )
+    agg_endpointing: float | None = (
+        pooled.endpointing_aligned / pooled.endpointing_measured
+        if pooled.endpointing_measured > 0
+        else None
+    )
+
     return EvalReport(
         n_conversations=len(per_conv),
         aggregate_turn_latency=_percentile_stats(all_latencies),
         aggregate_wer=agg_wer,
-        aggregate_faithfulness=sum(s.response_faithfulness for s in per_conv) / len(per_conv),
+        aggregate_faithfulness=agg_faithfulness,
         aggregate_barge_in_success=agg_barge_in_success,
-        aggregate_false_trigger_rate=sum(s.false_trigger_rate for s in per_conv) / len(per_conv),
+        aggregate_false_trigger_rate=agg_false_trigger_rate,
         aggregate_barge_in_latency_p95_ms=agg_barge_p95,
         aggregate_tts_first_byte_jitter_ms=agg_jitter,
-        aggregate_endpointing_accuracy=_mean_or_none(
-            [s.endpointing_accuracy for s in per_conv]
-        ),
-        aggregate_llm_decisiveness=(sum(s.llm_decisiveness for s in per_conv) / len(per_conv)),
+        aggregate_endpointing_accuracy=agg_endpointing,
+        aggregate_llm_decisiveness=agg_decisiveness,
         per_conversation=per_conv,
     )
-
-
-def _mean_or_none(values: list[float | None]) -> float | None:
-    """Mean of `values`, skipping None entries; returns None when no signal at all."""
-    measured = [v for v in values if v is not None]
-    if not measured:
-        return None
-    return sum(measured) / len(measured)
 
 
 def render_report(report: EvalReport) -> str:
@@ -539,15 +628,13 @@ def render_report(report: EvalReport) -> str:
         f"{report.aggregate_turn_latency.p95_ms:.0f} / "
         f"{report.aggregate_turn_latency.p99_ms:.0f} |"
     )
-    lines.append(f"| Transcription WER (mean) | {report.aggregate_wer:.2%} |")
-    lines.append(f"| Response faithfulness (mean) | {report.aggregate_faithfulness:.2%} |")
-    barge_success_cell = (
-        "n/a"
-        if report.aggregate_barge_in_success is None
-        else f"{report.aggregate_barge_in_success:.2%}"
-    )
+    lines.append(f"| Transcription WER (corpus) | {report.aggregate_wer:.2%} |")
+    faithfulness_cell = _pct_or_na(report.aggregate_faithfulness)
+    lines.append(f"| Response faithfulness (pooled) | {faithfulness_cell} |")
+    barge_success_cell = _pct_or_na(report.aggregate_barge_in_success)
     lines.append(f"| Barge-in success (pooled) | {barge_success_cell} |")
-    lines.append(f"| False-trigger rate (mean) | {report.aggregate_false_trigger_rate:.2%} |")
+    false_trigger_cell = _pct_or_na(report.aggregate_false_trigger_rate)
+    lines.append(f"| False-trigger rate (pooled) | {false_trigger_cell} |")
     barge_p95_cell = (
         "n/a"
         if report.aggregate_barge_in_latency_p95_ms is None
@@ -560,13 +647,10 @@ def render_report(report: EvalReport) -> str:
         else f"{report.aggregate_tts_first_byte_jitter_ms:.1f}"
     )
     lines.append(f"| TTS first-byte jitter (ms) | {jitter_cell} |")
-    endpoint_cell = (
-        "n/a"
-        if report.aggregate_endpointing_accuracy is None
-        else f"{report.aggregate_endpointing_accuracy:.2%}"
-    )
-    lines.append(f"| Endpointing accuracy (mean) | {endpoint_cell} |")
-    lines.append(f"| LLM decisiveness (mean) | {report.aggregate_llm_decisiveness:.2%} |")
+    endpoint_cell = _pct_or_na(report.aggregate_endpointing_accuracy)
+    lines.append(f"| Endpointing accuracy (pooled) | {endpoint_cell} |")
+    decisiveness_cell = _pct_or_na(report.aggregate_llm_decisiveness)
+    lines.append(f"| LLM decisiveness (pooled) | {decisiveness_cell} |")
     lines.append("")
     lines.append("## Per conversation")
     lines.append("")
@@ -588,6 +672,11 @@ def render_report(report: EvalReport) -> str:
             f"{s.llm_decisiveness:.2%} |"
         )
     return "\n".join(lines) + "\n"
+
+
+def _pct_or_na(value: float | None) -> str:
+    """Render a 0..1 fraction as a percentage, or ``"n/a"`` for None."""
+    return "n/a" if value is None else f"{value:.2%}"
 
 
 def _md_cell(value: str) -> str:
@@ -637,14 +726,9 @@ def render_report_html(report: EvalReport) -> str:
             ),
         ),
         row("Transcription WER (mean)", f"{report.aggregate_wer:.2%}"),
-        row("Response faithfulness (mean)", f"{report.aggregate_faithfulness:.2%}"),
-        row(
-            "Barge-in success (pooled)",
-            "n/a"
-            if report.aggregate_barge_in_success is None
-            else f"{report.aggregate_barge_in_success:.2%}",
-        ),
-        row("False-trigger rate (mean)", f"{report.aggregate_false_trigger_rate:.2%}"),
+        row("Response faithfulness (pooled)", _pct_or_na(report.aggregate_faithfulness)),
+        row("Barge-in success (pooled)", _pct_or_na(report.aggregate_barge_in_success)),
+        row("False-trigger rate (pooled)", _pct_or_na(report.aggregate_false_trigger_rate)),
         row(
             "Barge-in yield p95 (ms)",
             "n/a"
@@ -657,13 +741,8 @@ def render_report_html(report: EvalReport) -> str:
             if report.aggregate_tts_first_byte_jitter_ms is None
             else f"{report.aggregate_tts_first_byte_jitter_ms:.1f}",
         ),
-        row(
-            "Endpointing accuracy (mean)",
-            "n/a"
-            if report.aggregate_endpointing_accuracy is None
-            else f"{report.aggregate_endpointing_accuracy:.2%}",
-        ),
-        row("LLM decisiveness (mean)", f"{report.aggregate_llm_decisiveness:.2%}"),
+        row("Endpointing accuracy (pooled)", _pct_or_na(report.aggregate_endpointing_accuracy)),
+        row("LLM decisiveness (pooled)", _pct_or_na(report.aggregate_llm_decisiveness)),
     ]
     per_conv_rows = []
     for s in report.per_conversation:

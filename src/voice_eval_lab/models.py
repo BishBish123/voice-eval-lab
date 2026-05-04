@@ -130,7 +130,15 @@ class EvalReport(BaseModel):
     n_conversations: int
     aggregate_turn_latency: TurnLatencyStats
     aggregate_wer: float
-    aggregate_faithfulness: float
+    aggregate_faithfulness: float | None = Field(
+        default=None,
+        description=(
+            "Pooled fraction of agent replies grounded in gold facts: "
+            "sum(grounded_replies) / sum(replies_with_gold_facts). None when no "
+            "conversation in the run had any gold facts (no signal — distinct from "
+            "1.0 which means every reply quoted a fact)."
+        ),
+    )
     aggregate_barge_in_success: float | None = Field(
         default=None,
         description=(
@@ -140,7 +148,14 @@ class EvalReport(BaseModel):
             "means every interrupt was handled inside budget)."
         ),
     )
-    aggregate_false_trigger_rate: float
+    aggregate_false_trigger_rate: float | None = Field(
+        default=None,
+        description=(
+            "Pooled fraction of turns the pipeline marked as false_trigger: "
+            "sum(false_trigger_turns) / sum(turn_runs). None when no conversation in "
+            "the run produced any turn_runs at all."
+        ),
+    )
     aggregate_barge_in_latency_p95_ms: float | None = Field(
         default=None,
         description=(
@@ -162,5 +177,12 @@ class EvalReport(BaseModel):
             "VAD signal. None when no conversation produced any vad_end span."
         ),
     )
-    aggregate_llm_decisiveness: float = 1.0
+    aggregate_llm_decisiveness: float | None = Field(
+        default=None,
+        description=(
+            "Pooled fraction of agent replies that don't hedge: "
+            "sum(decisive_replies) / sum(non_false_trigger_replies). None when no "
+            "conversation had any non-false-trigger replies."
+        ),
+    )
     per_conversation: list[ConversationScore]

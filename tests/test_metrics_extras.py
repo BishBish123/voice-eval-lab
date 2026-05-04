@@ -551,6 +551,107 @@ class TestTurnCoverage:
 # ---------------------------------------------------------------------------
 
 
+class TestAggregatePooledRatios:
+    """Faithfulness, false-trigger, decisiveness, endpointing must be pooled.
+
+    Mean-of-per-conversation overweights short conversations. A 1-turn
+    conversation at 100% reads the same as a 50-turn conversation at
+    50% in the mean (1.0+0.5)/2 = 0.75; the corpus rate is 26/51 ~ 0.51.
+    """
+
+    def test_aggregate_faithfulness_uses_pooled_replies(self) -> None:
+        # Short conversation (1 reply, grounded) + long conversation
+        # (50 replies, half grounded). Mean = 0.75, pooled = 26/51 ~= 0.51.
+        gold = ["alpha"]
+        conv_short = make_conv([make_user("u1")], gold=gold, conv_id="short")
+        run_short = make_run(
+            [make_turn_run(reply="alpha is the fact.")],
+            conv_id="short",
+        )
+        long_user_turns = []
+        long_runs = []
+        for i in range(50):
+            long_user_turns.append(make_user(f"u{i}", start=i * 1000, end=i * 1000 + 500))
+            long_runs.append(
+                make_turn_run(
+                    reply="alpha is the fact." if i % 2 == 0 else "no idea",
+                    user_turn_index=i,
+                )
+            )
+        conv_long = make_conv(long_user_turns, gold=gold, conv_id="long")
+        run_long = make_run(long_runs, conv_id="long")
+        report = score_run([(conv_short, run_short), (conv_long, run_long)])
+        # Pooled: (1 + 25) / (1 + 50) = 26/51.
+        assert report.aggregate_faithfulness == pytest.approx(26 / 51)
+
+    def test_aggregate_false_trigger_uses_pooled_turns(self) -> None:
+        # Short conversation (1 turn, 1 false-trigger) -> 100% per-conv.
+        # Long conversation (50 turns, 0 false-triggers) -> 0% per-conv.
+        # Mean = 50%, pooled = 1/51 ~= 0.02.
+        conv_short = make_conv([make_user("u1")], conv_id="short")
+        run_short = make_run(
+            [make_turn_run(false_trigger=True)],
+            conv_id="short",
+        )
+        long_user_turns = [
+            make_user(f"u{i}", start=i * 1000, end=i * 1000 + 500) for i in range(50)
+        ]
+        long_runs = [make_turn_run(user_turn_index=i) for i in range(50)]
+        conv_long = make_conv(long_user_turns, conv_id="long")
+        run_long = make_run(long_runs, conv_id="long")
+        report = score_run([(conv_short, run_short), (conv_long, run_long)])
+        assert report.aggregate_false_trigger_rate == pytest.approx(1 / 51)
+
+    def test_aggregate_decisiveness_uses_pooled_replies(self) -> None:
+        # Short: 1 decisive reply. Long: 50 replies, 10 decisive.
+        # Mean = (1.0 + 0.2) / 2 = 0.6, pooled = 11/51 ~= 0.216.
+        conv_short = make_conv([make_user("u1")], conv_id="short")
+        run_short = make_run(
+            [make_turn_run(reply="The answer is 42.")],
+            conv_id="short",
+        )
+        long_user_turns = [
+            make_user(f"u{i}", start=i * 1000, end=i * 1000 + 500) for i in range(50)
+        ]
+        long_runs = []
+        for i in range(50):
+            reply = "The answer is 42." if i < 10 else "I don't know."
+            long_runs.append(make_turn_run(reply=reply, user_turn_index=i))
+        conv_long = make_conv(long_user_turns, conv_id="long")
+        run_long = make_run(long_runs, conv_id="long")
+        report = score_run([(conv_short, run_short), (conv_long, run_long)])
+        assert report.aggregate_llm_decisiveness == pytest.approx(11 / 51)
+
+    def test_aggregate_endpointing_uses_pooled_measured_turns(self) -> None:
+        # Short conv (1 turn, aligned). Long conv (50 turns, half aligned).
+        # Mean = (1.0 + 0.5) / 2 = 0.75, pooled = 26/51.
+        conv_short = make_conv([make_user("u1", end=1000)], conv_id="short")
+        run_short = make_run(
+            [make_turn_run(vad_end_ms=1000, first_byte_ms=1100)],
+            conv_id="short",
+        )
+        long_user_turns = []
+        long_runs = []
+        for i in range(50):
+            long_user_turns.append(
+                make_user(f"u{i}", start=i * 1000, end=i * 1000 + 500)
+            )
+            # Even turns are aligned, odd turns are 200ms off.
+            vad_drift = 0 if i % 2 == 0 else 200
+            long_runs.append(
+                make_turn_run(
+                    vad_end_ms=i * 1000 + 500 + vad_drift,
+                    first_byte_ms=i * 1000 + 600 + vad_drift,
+                    user_turn_index=i,
+                )
+            )
+        conv_long = make_conv(long_user_turns, conv_id="long")
+        run_long = make_run(long_runs, conv_id="long")
+        report = score_run([(conv_short, run_short), (conv_long, run_long)])
+        # Pooled aligned: 1 + 25 = 26; pooled measured: 1 + 50 = 51.
+        assert report.aggregate_endpointing_accuracy == pytest.approx(26 / 51)
+
+
 class TestAggregateBargeInSuccessPooled:
     def test_aggregate_barge_in_pools_interrupted_turns(self) -> None:
         # Three conversations: two with no interrupts (used to inflate the
