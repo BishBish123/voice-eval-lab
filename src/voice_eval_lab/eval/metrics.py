@@ -341,6 +341,43 @@ def score_conversation(conversation: Conversation, run: ConversationRun) -> Conv
     )
 
 
+class _RunPool:
+    """Collects per-turn samples pooled across the whole run.
+
+    Aggregates that compare distributions (latencies, barge-in yields,
+    jitter) or denominators (corpus WER) need the *pooled* data, not
+    the mean of per-conversation aggregates. Bundling the loop here
+    keeps `score_run` from sprouting nested branches per metric.
+    """
+
+    __slots__ = ("barge_yields", "latencies", "wer_hyps", "wer_refs")
+
+    def __init__(self) -> None:
+        self.latencies: list[float] = []
+        self.barge_yields: list[float] = []
+        self.wer_refs: list[str] = []
+        self.wer_hyps: list[str] = []
+
+
+def _pool_run_samples(pairs: list[tuple[Conversation, ConversationRun]]) -> _RunPool:
+    pool = _RunPool()
+    for c, r in pairs:
+        user_turns = [t for t in c.turns if t.role is TurnRole.USER]
+        for ut, tr in zip(user_turns, r.turn_runs, strict=False):
+            if ut.text.strip():
+                pool.wer_refs.append(ut.text)
+                pool.wer_hyps.append(tr.transcribed_text)
+        for tr in r.turn_runs:
+            vad = _find_span(tr.spans, "vad_end")
+            fb = _find_span(tr.spans, "tts_first_byte")
+            if vad and fb:
+                pool.latencies.append(float(fb.ended_at_ms - vad.ended_at_ms))
+            for s in tr.spans:
+                if s.name == "barge_in.yield":
+                    pool.barge_yields.append(float(s.ended_at_ms - s.started_at_ms))
+    return pool
+
+
 def score_run(pairs: list[tuple[Conversation, ConversationRun]]) -> EvalReport:
     per_conv = [score_conversation(c, r) for c, r in pairs]
     if not per_conv:
@@ -358,17 +395,11 @@ def score_run(pairs: list[tuple[Conversation, ConversationRun]]) -> EvalReport:
             per_conversation=[],
         )
 
-    all_latencies: list[float] = []
-    all_barge_yields: list[float] = []
-    for _c, r in pairs:
-        for tr in r.turn_runs:
-            vad = _find_span(tr.spans, "vad_end")
-            fb = _find_span(tr.spans, "tts_first_byte")
-            if vad and fb:
-                all_latencies.append(float(fb.ended_at_ms - vad.ended_at_ms))
-            for s in tr.spans:
-                if s.name == "barge_in.yield":
-                    all_barge_yields.append(float(s.ended_at_ms - s.started_at_ms))
+    pooled = _pool_run_samples(pairs)
+    all_latencies = pooled.latencies
+    all_barge_yields = pooled.barge_yields
+    pooled_wer_refs = pooled.wer_refs
+    pooled_wer_hyps = pooled.wer_hyps
 
     # Aggregate barge-in p95 must come from the *pooled* sample, not the
     # mean of per-conversation p95s — the latter folds zero-signal
@@ -388,10 +419,20 @@ def score_run(pairs: list[tuple[Conversation, ConversationRun]]) -> EvalReport:
     else:
         agg_jitter = None
 
+    # Corpus WER is computed against the *pooled* refs/hyps across every
+    # measurable user turn in every conversation. Mean-of-per-conv-WER
+    # overweights short conversations relative to long ones — a one-turn
+    # conversation at 0% WER and a 50-turn conversation at 10% should not
+    # average to 5%, because the actual word-error rate over the corpus
+    # is ~10%. jiwer.wer accepts the parallel lists directly.
+    agg_wer = (
+        float(jiwer.wer(pooled_wer_refs, pooled_wer_hyps)) if pooled_wer_refs else 0.0
+    )
+
     return EvalReport(
         n_conversations=len(per_conv),
         aggregate_turn_latency=_percentile_stats(all_latencies),
-        aggregate_wer=sum(s.transcription_wer for s in per_conv) / len(per_conv),
+        aggregate_wer=agg_wer,
         aggregate_faithfulness=sum(s.response_faithfulness for s in per_conv) / len(per_conv),
         aggregate_barge_in_success=sum(s.barge_in_success_rate for s in per_conv) / len(per_conv),
         aggregate_false_trigger_rate=sum(s.false_trigger_rate for s in per_conv) / len(per_conv),

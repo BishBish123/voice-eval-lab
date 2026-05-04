@@ -544,3 +544,49 @@ class TestTurnCoverage:
         )
         score = score_conversation(conv, run)
         assert score.conv_id == "c"
+
+
+# ---------------------------------------------------------------------------
+# Aggregate WER — corpus pool, not mean of per-conversation WER
+# ---------------------------------------------------------------------------
+
+
+class TestAggregateWERCorpusPool:
+    def test_aggregate_wer_uses_corpus_pool(self) -> None:
+        # Two conversations: one short conversation at 0% WER and one long
+        # conversation at ~10% WER. The mean-of-per-conv aggregate would
+        # report 5%; the corpus-pooled WER must come out near the long
+        # conversation's rate because that's where almost all the words live.
+
+        # Short conversation: one turn, perfect transcription.
+        short_user = make_user("hello world", end=1000)
+        short_run_turn = make_turn_run(transcribed="hello world")
+        conv_short = make_conv([short_user], conv_id="short")
+        run_short = make_run([short_run_turn], conv_id="short")
+
+        # Long conversation: 100 turns, each with WER=10% (1 wrong word in 10).
+        long_turns = []
+        long_runs = []
+        for i in range(100):
+            long_turns.append(
+                make_user(
+                    "alpha bravo charlie delta echo foxtrot golf hotel india juliet",
+                    start=i * 1000,
+                    end=i * 1000 + 500,
+                )
+            )
+            long_runs.append(
+                make_turn_run(
+                    transcribed="WRONG bravo charlie delta echo foxtrot golf hotel india juliet",
+                    user_turn_index=i,
+                )
+            )
+        conv_long = make_conv(long_turns, conv_id="long")
+        run_long = make_run(long_runs, conv_id="long")
+
+        report = score_run([(conv_short, run_short), (conv_long, run_long)])
+        # Corpus has 2 (short) + 1000 (long) = 1002 reference words; 100 errors
+        # all in long conv; expected WER ~= 100/1002 ~= 0.0998.
+        assert report.aggregate_wer == pytest.approx(100 / 1002, rel=1e-6)
+        # Sanity check: this is far from the (0 + 0.1) / 2 = 0.05 a mean would give.
+        assert report.aggregate_wer > 0.09
