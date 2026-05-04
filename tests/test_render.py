@@ -222,6 +222,12 @@ class TestHTMLEscape:
         assert 'evil"value' not in out
         assert "evil&quot;value" in out
 
+    def test_html_report_includes_viewport_meta(self) -> None:
+        # Without the viewport meta tag mobile browsers render the report
+        # at desktop width — locks readability on phones.
+        out = render_report_html(_report_with_conv())
+        assert '<meta name="viewport" content="width=device-width, initial-scale=1" />' in out
+
 
 # ---------------------------------------------------------------------------
 # score_run + render integration on a hand-rolled fixture

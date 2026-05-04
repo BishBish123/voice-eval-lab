@@ -568,6 +568,7 @@ def render_report_html(report: EvalReport) -> str:
 <html lang="en">
 <head>
 <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Voice eval report</title>
 <style>
   body {{ font-family: -apple-system, system-ui, sans-serif; max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }}
