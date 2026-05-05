@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -84,8 +85,53 @@ class TestRoundTrip:
     def test_baseline_write_does_not_leave_tmp(self, tmp_path: Path) -> None:
         path = tmp_path / "baseline.json"
         write_baseline(_report(), path)
-        # Successful write removes the tmp file via os.replace.
-        assert not path.with_name(path.name + ".tmp").exists()
+        # Successful write removes the temp file via os.replace. With the
+        # tempfile-based unique naming, scan the directory for any
+        # `.tmp.*` siblings rather than checking a fixed name.
+        leftover = [p for p in tmp_path.iterdir() if p.name.startswith(".tmp.")]
+        assert leftover == []
+
+    def test_concurrent_baseline_writes_dont_race(self, tmp_path: Path) -> None:
+        # Two concurrent saves used to share the same `.tmp` sibling: one
+        # process's flush could be truncated by the other's open(), and
+        # whichever os.replace() landed last would win with a half-written
+        # body. The fix uses unique tempfile.mkstemp names — both writes
+        # complete, no `.tmp.*` orphans remain, and the final file is one
+        # of the two valid payloads.
+        path = tmp_path / "baseline.json"
+        report_a = _report(aggregate_wer=0.01)
+        report_b = _report(aggregate_wer=0.99)
+        errors: list[BaseException] = []
+
+        def writer(report: EvalReport) -> None:
+            try:
+                for _ in range(20):
+                    write_baseline(report, path)
+            except BaseException as exc:  # pragma: no cover - bubble up
+                errors.append(exc)
+
+        ta = threading.Thread(target=writer, args=(report_a,))
+        tb = threading.Thread(target=writer, args=(report_b,))
+        ta.start()
+        tb.start()
+        ta.join()
+        tb.join()
+        assert errors == []
+        leftover = [p for p in tmp_path.iterdir() if p.name.startswith(".tmp.")]
+        assert leftover == []
+        loaded = read_baseline(path)
+        assert loaded.aggregate_wer in {0.01, 0.99}
+
+    def test_temp_path_symlink_rejected(self, tmp_path: Path) -> None:
+        # A pre-planted symlink at the final destination must be rejected
+        # so the rename cannot redirect to an arbitrary location.
+        elsewhere = tmp_path / "elsewhere.json"
+        path = tmp_path / "baseline.json"
+        path.symlink_to(elsewhere)
+        with pytest.raises(OSError, match="symlink"):
+            write_baseline(_report(), path)
+        # Symlink target must not have been created.
+        assert not elsewhere.exists()
 
 
 # ---------------------------------------------------------------------------

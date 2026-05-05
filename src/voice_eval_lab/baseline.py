@@ -25,8 +25,10 @@ any field the current `EvalReport` schema declares.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -78,22 +80,45 @@ def _expected_report_fields() -> set[str]:
 def write_baseline(report: EvalReport, path: Path) -> None:
     """Persist `report` wrapped with the current schema version + timestamp.
 
-    Writes are atomic: the JSON is written to a sibling `<path>.tmp`
-    file first and then renamed into place via `os.replace`. A crash
-    or Ctrl-C between the two steps leaves the previous baseline
-    intact rather than truncating it — a half-written file would later
-    make `compare` fail with a JSON decode error and lose the
-    regression history.
+    Writes are atomic and concurrent-safe: the JSON is streamed into a
+    uniquely-named temp file in the destination directory (created via
+    ``tempfile.NamedTemporaryFile`` so two concurrent saves cannot collide
+    on a fixed ``<name>.tmp``), then renamed into place via ``os.replace``.
+    A crash or Ctrl-C between the two steps leaves the previous baseline
+    intact rather than truncating it.
+
+    The destination is also rejected if it is a symlink — a symlinked
+    final path could redirect the rename to an arbitrary location. The
+    same check runs on the temp path so a pre-planted symlink in the
+    destination directory cannot be exploited to overwrite something
+    outside it. (The CLI does its own symlink check on the final path
+    too; this layer enforces the invariant for any direct caller.)
     """
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink():
+        raise OSError(f"refusing to write to symlinked baseline path: {path}")
     payload = {
         "schema_version": CURRENT_SCHEMA_VERSION,
         "saved_at": datetime.now(UTC).isoformat(),
         "report": report.model_dump(),
     }
-    tmp_path = path.with_name(path.name + ".tmp")
-    tmp_path.write_text(json.dumps(payload, indent=2))
-    os.replace(tmp_path, path)
+    fd, tmp_name = tempfile.mkstemp(prefix=".tmp.", dir=path.parent)
+    tmp_path = Path(tmp_name)
+    try:
+        if tmp_path.is_symlink():
+            # tempfile.mkstemp creates a regular file via O_EXCL, so this
+            # is belt-and-suspenders — but if anything ever produces a
+            # symlinked temp we abort before writing through it.
+            raise OSError(f"refusing to write to symlinked temp path: {tmp_path}")
+        with os.fdopen(fd, "w") as fh:
+            fh.write(json.dumps(payload, indent=2))
+        os.replace(tmp_path, path)
+    except BaseException:
+        # Clean up the temp on any failure (including KeyboardInterrupt) so
+        # we don't leave orphaned `.tmp.*` files in the destination dir.
+        with contextlib.suppress(FileNotFoundError):
+            tmp_path.unlink()
+        raise
 
 
 def read_baseline(path: Path) -> EvalReport:
