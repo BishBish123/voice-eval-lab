@@ -142,7 +142,24 @@ def compare(
     thresholds: RegressionThresholds | None = None,
 ) -> list[MetricDiff]:
     """Return per-metric diffs; the `regressed` flag is set when |delta| > threshold *and* the
-    direction is bad."""
+    direction is bad.
+
+    Signal loss/gain semantics
+    --------------------------
+
+    A `None` value means the metric had no usable samples in that run (e.g.
+    no endpointing-labelled turns, or no per-turn TTS first-byte timings to
+    compute jitter from). Treating `baseline=number, current=None` as "no
+    change" hides real regressions where a code change accidentally drops
+    instrumentation. So:
+
+    - baseline numeric, current None  → flagged as a regression (signal loss)
+    - baseline None,    current numeric → improvement (signal gain), not regressed
+    - both None                        → skipped, never regresses
+
+    Delta is left as `None` whenever either side is None — there is no
+    meaningful arithmetic delta across a missing sample.
+    """
     th = thresholds or RegressionThresholds()
     diffs: list[MetricDiff] = []
 
@@ -154,12 +171,24 @@ def compare(
         *,
         lower_is_better: bool,
     ) -> None:
-        # When either side has no signal we can't fairly compute a delta.
-        # The diff still appears in the report (so consumers can see "n/a"
-        # for documentation), but it is never flagged as a regression.
-        if b is None or c is None:
+        # When either side has no signal we can't compute an arithmetic
+        # delta, but the four cases mean different things:
+        #   * both None             → neither run produced this metric; skip
+        #   * baseline only None    → the metric is now being measured; gain
+        #   * current only None     → instrumentation lost since baseline; regression
+        if b is None and c is None:
             diffs.append(
-                MetricDiff(metric=metric, baseline=b, current=c, delta=None, regressed=False)
+                MetricDiff(metric=metric, baseline=None, current=None, delta=None, regressed=False)
+            )
+            return
+        if b is None:
+            diffs.append(
+                MetricDiff(metric=metric, baseline=None, current=c, delta=None, regressed=False)
+            )
+            return
+        if c is None:
+            diffs.append(
+                MetricDiff(metric=metric, baseline=b, current=None, delta=None, regressed=True)
             )
             return
         delta = c - b

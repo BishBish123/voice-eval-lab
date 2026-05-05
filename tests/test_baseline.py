@@ -227,6 +227,42 @@ class TestCompare:
         wer = next(d for d in diffs if d.metric == "wer")
         assert wer.regressed
 
+    def test_compare_treats_signal_loss_as_regression(self) -> None:
+        # Endpointing or jitter that had a number in the baseline run but
+        # has dropped to None in the current run means the eval lost signal
+        # — almost always a code regression that nuked the instrumentation.
+        base = _report(aggregate_endpointing_accuracy=0.92)
+        current = _report(aggregate_endpointing_accuracy=None)
+        diffs = compare(base, current)
+        endp = next(d for d in diffs if d.metric == "endpointing_accuracy")
+        assert endp.regressed
+        assert endp.baseline == 0.92
+        assert endp.current is None
+        assert endp.delta is None
+
+    def test_compare_treats_signal_gain_as_improvement(self) -> None:
+        # Inverse: baseline had no signal (metric did not exist or had no
+        # samples), current run produces one. That is strictly better and
+        # must not be flagged as a regression.
+        base = _report(aggregate_tts_first_byte_jitter_ms=None)
+        current = _report(aggregate_tts_first_byte_jitter_ms=4.0)
+        diffs = compare(base, current)
+        jitter = next(d for d in diffs if d.metric == "tts_first_byte_jitter_ms")
+        assert not jitter.regressed
+        assert jitter.baseline is None
+        assert jitter.current == 4.0
+        assert jitter.delta is None
+
+    def test_compare_skips_both_none(self) -> None:
+        base = _report(aggregate_llm_decisiveness=None)
+        current = _report(aggregate_llm_decisiveness=None)
+        diffs = compare(base, current)
+        d = next(d for d in diffs if d.metric == "llm_decisiveness")
+        assert not d.regressed
+        assert d.baseline is None
+        assert d.current is None
+        assert d.delta is None
+
     def test_render_diffs_shape(self) -> None:
         out = render_diffs(compare(_report(), _report()))
         assert "Metric" in out
