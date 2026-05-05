@@ -57,6 +57,19 @@ class TestBargeInLatencyP95:
         run = ConversationRun(conv_id="c", topic="t", user_turns_played=0, turn_runs=[])
         assert barge_in_latency_p95_ms(run) == 0.0
 
+    def test_barge_in_p95_uses_linear_interpolation(self) -> None:
+        # With N=2 samples [50, 100] a floor-index estimator (`int(0.95*N)`)
+        # picks index 1 -> 100ms, hiding the spread. Linear-interpolated p95
+        # interpolates 95% of the way from 50 to 100 -> 97.5ms — matches the
+        # turn-latency stats (which already use method="linear") and exposes
+        # near-budget regressions in small-N runs.
+        runs = [
+            make_turn_run(interrupted=True, barge_yield_ms=50, user_turn_index=0),
+            make_turn_run(interrupted=True, barge_yield_ms=100, user_turn_index=1),
+        ]
+        run = make_run(runs)
+        assert barge_in_latency_p95_ms(run) == pytest.approx(97.5)
+
 
 # ---------------------------------------------------------------------------
 # tts_first_byte_jitter
@@ -434,8 +447,9 @@ class TestAggregateBargeInP95:
         )
         run_c = make_run([make_turn_run()], conv_id="c")
         report = score_run([(conv_a, run_a), (conv_b, run_b), (conv_c, run_c)])
-        # Pooled samples sorted: [80, 120, 200]; idx = int(0.95 * 3) = 2 -> 200.
-        assert report.aggregate_barge_in_latency_p95_ms == 200.0
+        # Pooled samples sorted: [80, 120, 200]. Linear-interpolated p95
+        # at position (n-1)*0.95 = 1.9 -> 120 + 0.9*(200-120) = 192.0.
+        assert report.aggregate_barge_in_latency_p95_ms == pytest.approx(192.0)
 
     def test_aggregate_barge_in_p95_returns_none_with_no_signal(self) -> None:
         conv_a = make_conv([make_user("a")], conv_id="a")

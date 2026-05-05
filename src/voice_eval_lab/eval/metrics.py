@@ -269,6 +269,11 @@ def barge_in_latency_p95_ms(run: ConversationRun) -> float:
     Returns 0.0 when no interrupted turns exist — there's no signal to
     summarise. The binary success rate hides regressions that happen
     *inside* the budget; this metric exposes the distribution.
+
+    Uses `numpy.percentile` with linear interpolation to match the rest
+    of the percentile stats. A floor-index `int(0.95 * n)` would round a
+    two-sample [50, 100] to index 1 -> 100ms, hiding the half-second
+    spread that linear interpolation reports as 97.5ms.
     """
     samples: list[float] = []
     for tr in run.turn_runs:
@@ -277,9 +282,7 @@ def barge_in_latency_p95_ms(run: ConversationRun) -> float:
                 samples.append(float(s.ended_at_ms - s.started_at_ms))
     if not samples:
         return 0.0
-    samples.sort()
-    idx = min(len(samples) - 1, int(0.95 * len(samples)))
-    return float(samples[idx])
+    return float(np.percentile(samples, 95, method="linear"))
 
 
 def tts_first_byte_jitter_ms(run: ConversationRun) -> float:
@@ -542,10 +545,12 @@ def score_run(
     # Aggregate barge-in p95 must come from the *pooled* sample, not the
     # mean of per-conversation p95s — the latter folds zero-signal
     # conversations into the headline and hides the real distribution.
+    # Uses linear-interpolated percentile so the small-N case is consistent
+    # with the turn-latency stats (see _percentile_stats).
     if all_barge_yields:
-        all_barge_yields.sort()
-        idx = min(len(all_barge_yields) - 1, int(0.95 * len(all_barge_yields)))
-        agg_barge_p95: float | None = float(all_barge_yields[idx])
+        agg_barge_p95: float | None = float(
+            np.percentile(all_barge_yields, 95, method="linear")
+        )
     else:
         agg_barge_p95 = None
 
