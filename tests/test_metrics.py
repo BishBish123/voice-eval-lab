@@ -141,10 +141,15 @@ class TestFaithfulness:
 
 
 class TestBargeIn:
+    # Budget used by the per-conversation tests below. The metric requires
+    # the budget explicitly so the test cases mirror what a real caller
+    # passes in (`score_run` threads `pipeline.barge_in_yield_ms`).
+    BUDGET_MS = 200
+
     def test_no_interrupted_turns_returns_one(self) -> None:
         conv = _conv([_user("hi")])
         run = _run([_turn_run(transcribed="hi", reply="hi", vad_end_ms=0, first_byte_ms=10)])
-        assert barge_in_success_rate(conv, run) == 1.0
+        assert barge_in_success_rate(conv, run, barge_in_budget_ms=self.BUDGET_MS) == 1.0
 
     def test_interrupted_turn_yielded(self) -> None:
         conv = _conv([_user("interrupted", interrupted=True)])
@@ -168,7 +173,7 @@ class TestBargeIn:
                 )
             ],
         )
-        assert barge_in_success_rate(conv, run) == 1.0
+        assert barge_in_success_rate(conv, run, barge_in_budget_ms=self.BUDGET_MS) == 1.0
 
     def test_interrupted_turn_no_yield_span(self) -> None:
         conv = _conv([_user("interrupted", interrupted=True)])
@@ -190,7 +195,7 @@ class TestBargeIn:
                 )
             ],
         )
-        assert barge_in_success_rate(conv, run) == 0.0
+        assert barge_in_success_rate(conv, run, barge_in_budget_ms=self.BUDGET_MS) == 0.0
 
     def test_no_yield_span_fails_barge_in(self) -> None:
         # Interrupted turn that has tts_first_byte but no barge_in.yield —
@@ -213,10 +218,10 @@ class TestBargeIn:
                 )
             ],
         )
-        assert barge_in_success_rate(conv, run) == 0.0
+        assert barge_in_success_rate(conv, run, barge_in_budget_ms=self.BUDGET_MS) == 0.0
 
     def test_over_budget_yield_fails(self) -> None:
-        # yield span exists but blows the default 200ms budget.
+        # yield span exists but blows the explicit 200ms budget.
         conv = _conv([_user("interrupted", interrupted=True)])
         run = ConversationRun(
             conv_id="c",
@@ -234,7 +239,7 @@ class TestBargeIn:
                 )
             ],
         )
-        assert barge_in_success_rate(conv, run) == 0.0
+        assert barge_in_success_rate(conv, run, barge_in_budget_ms=self.BUDGET_MS) == 0.0
 
     def test_under_budget_yield_succeeds(self) -> None:
         conv = _conv([_user("interrupted", interrupted=True)])
@@ -254,7 +259,7 @@ class TestBargeIn:
                 )
             ],
         )
-        assert barge_in_success_rate(conv, run) == 1.0
+        assert barge_in_success_rate(conv, run, barge_in_budget_ms=self.BUDGET_MS) == 1.0
 
     def test_custom_budget(self) -> None:
         # 250ms yield: passes a 300ms budget, fails a 100ms budget.

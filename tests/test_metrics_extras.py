@@ -551,6 +551,27 @@ class TestTurnCoverage:
 # ---------------------------------------------------------------------------
 
 
+class TestBargeInBudgetThreaded:
+    def test_barge_in_budget_threaded_from_pipeline(self) -> None:
+        # Pipeline configured at 80ms; conversation has yield at 90ms. Under
+        # the old 200ms metric default this would be "success"; threaded with
+        # the actual pipeline budget it must read as failure (90 > 80).
+        conv = make_conv(
+            [make_user("u1", interrupted=True)],
+            conv_id="strict",
+        )
+        run = make_run(
+            [make_turn_run(interrupted=True, barge_yield_ms=90)],
+            conv_id="strict",
+        )
+        # Strict 80ms budget — 90ms yield exceeds it.
+        strict = score_run([(conv, run)], barge_in_budget_ms=80)
+        assert strict.aggregate_barge_in_success == 0.0
+        # Slack 200ms budget — would pass under the old default.
+        slack = score_run([(conv, run)], barge_in_budget_ms=200)
+        assert slack.aggregate_barge_in_success == 1.0
+
+
 class TestAggregatePooledRatios:
     """Faithfulness, false-trigger, decisiveness, endpointing must be pooled.
 

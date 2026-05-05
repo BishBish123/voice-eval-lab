@@ -95,7 +95,12 @@ def _run_eval(
         )
         conversations = default_golden_set()
         runs = [await pipeline.run(c) for c in conversations]
-        return score_run(list(zip(conversations, runs, strict=True)))
+        # Thread the pipeline's actual configured budget through to the
+        # scorer so the metric and the pipeline contract cannot drift.
+        return score_run(
+            list(zip(conversations, runs, strict=True)),
+            barge_in_budget_ms=pipeline.barge_in_yield_ms,
+        )
 
     return asyncio.run(_go())
 

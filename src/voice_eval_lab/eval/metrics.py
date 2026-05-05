@@ -181,7 +181,17 @@ def response_faithfulness(conversation: Conversation, run: ConversationRun) -> f
     return grounded / counted if counted else 0.0
 
 
-DEFAULT_BARGE_IN_BUDGET_MS = 200
+DEFAULT_PIPELINE_BARGE_IN_BUDGET_MS = 100
+"""Canonical pipeline barge-in budget — matches `VoicePipeline.barge_in_yield_ms`.
+
+The metric and the pipeline used to disagree: the metric scored
+against a 200ms budget while the pipeline shipped a 100ms yield, so
+a 150ms yield was "success" by the metric and 50ms over budget by
+contract. Per-conversation `barge_in_success_rate` now requires the
+budget explicitly (no default); higher-level `score_run` /
+`score_conversation` thread *this* constant through unless the caller
+overrides, and the CLI passes the pipeline's actual configured value.
+"""
 
 
 def _barge_in_counts(
@@ -215,7 +225,8 @@ def _barge_in_counts(
 def barge_in_success_rate(
     conversation: Conversation,
     run: ConversationRun,
-    barge_in_budget_ms: int = DEFAULT_BARGE_IN_BUDGET_MS,
+    *,
+    barge_in_budget_ms: int,
 ) -> float:
     """Fraction of user-interrupted turns the pipeline yielded inside `barge_in_budget_ms`.
 
@@ -224,6 +235,13 @@ def barge_in_success_rate(
     `tts_first_byte` span is *not* sufficient — the agent reaching TTS
     at all says nothing about whether it cut off the previous reply when
     the user barged in.
+
+    `barge_in_budget_ms` is required (no default) so the metric and the
+    pipeline cannot drift apart. The metric used to default to 200ms
+    while the canonical `VoicePipeline.barge_in_yield_ms` was 100ms,
+    which made a 150ms yield "success" by the metric and 50ms over
+    budget by contract. Callers thread the pipeline's actual configured
+    value via `score_run(..., barge_in_budget_ms=...)`.
 
     Returns 1.0 when there are no interrupted user turns (vacuously true).
     """
@@ -386,7 +404,7 @@ def score_conversation(
     conversation: Conversation,
     run: ConversationRun,
     *,
-    barge_in_budget_ms: int = DEFAULT_BARGE_IN_BUDGET_MS,
+    barge_in_budget_ms: int = DEFAULT_PIPELINE_BARGE_IN_BUDGET_MS,
 ) -> ConversationScore:
     _check_turn_coverage(conversation, run)
     return ConversationScore(
@@ -489,17 +507,6 @@ def _pool_run_samples(
         pool.endpointing_aligned += aligned
         pool.endpointing_measured += measured
     return pool
-
-
-DEFAULT_PIPELINE_BARGE_IN_BUDGET_MS = 100
-"""Canonical pipeline barge-in budget (matches `VoicePipeline.barge_in_yield_ms`).
-
-The metric and the pipeline used to disagree: the pipeline shipped a
-100ms yield while the metric scored against a 200ms budget, so a 150ms
-yield was "success" by the metric and 50ms over budget by contract.
-score_run() defaults to this constant; callers that run the pipeline
-with a different budget pass it through explicitly.
-"""
 
 
 def score_run(
