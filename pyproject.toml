@@ -1,7 +1,7 @@
 [project]
 name = "voice-eval-lab"
 version = "0.1.0"
-description = "Eval harness + reference pipeline for real-time voice agents: turn latency, WER, faithfulness, barge-in success, false-trigger rate."
+description = "Eval harness + reference pipeline for real-time voice agents: 9 metrics covering turn latency, WER, faithfulness, barge-in success/yield, false-trigger rate, TTS jitter, endpointing accuracy, and LLM decisiveness."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 license = { text = "MIT" }

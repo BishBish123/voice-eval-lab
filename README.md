@@ -69,14 +69,14 @@ Produces (with the bundled mock pipeline + golden set):
 | --- | ---: |
 | Conversations | 7 |
 | Turn latency p50 / p95 / p99 (ms) | 275 / 275 / 275 |
-| Transcription WER (mean) | 2.81% |
-| Response faithfulness (mean) | 71.43% |
-| Barge-in success (mean) | 100.00% |
-| False-trigger rate (mean) | 0.00% |
-| Barge-in yield p95 (ms) | 29 |
+| Transcription WER (corpus) | 3.19% |
+| Response faithfulness (pooled) | 57.14% |
+| Barge-in success (pooled) | 100.00% |
+| False-trigger rate (pooled) | 0.00% |
+| Barge-in yield p95 (ms) | 100 |
 | TTS first-byte jitter (ms) | 0.0 |
-| Endpointing accuracy (mean) | 100.00% |
-| LLM decisiveness (mean) | 57.14% |
+| Endpointing accuracy (pooled) | 100.00% |
+| LLM decisiveness (pooled) | 53.33% |
 
 Real numbers come from real adapters. The harness will produce the
 same shape.
