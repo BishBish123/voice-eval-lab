@@ -121,7 +121,11 @@ def run(
     ),
     false_trigger_rate: float = typer.Option(
         0.0,
-        help="Force the pipeline to emit a synthetic false-trigger turn (0 or 1).",
+        help=(
+            "Per-user-turn Bernoulli probability of injecting a synthetic "
+            "false-trigger turn (0..1). A fixed seed is used so corpus runs "
+            "are reproducible."
+        ),
         callback=_validate_unit_interval,
     ),
 ) -> None:

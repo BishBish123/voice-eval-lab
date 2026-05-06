@@ -14,6 +14,7 @@ behind the same Protocol surface.
 from __future__ import annotations
 
 import asyncio
+import random
 import re
 import time
 import unicodedata
@@ -273,17 +274,41 @@ class LatencyBudget:
 
 @dataclass
 class VoicePipeline:
+    """Reference voice pipeline. ``false_trigger_rate`` is the per-user-turn
+    Bernoulli probability of emitting a synthetic false-trigger turn (a
+    turn with ``false_trigger=True`` and an empty body) right after the
+    sampled user turn. ``false_trigger_seed`` makes that sampling
+    reproducible for tests and for golden-set scoring; passing ``None``
+    falls back to system entropy.
+
+    Rate semantics:
+      * 0.0 -> never inject (and the RNG is never consulted)
+      * 1.0 -> inject one synthetic after every user turn
+      * 0<r<1 -> independent Bernoulli per user turn
+    """
+
     stt: STT
     llm: LLM
     tts: TTS
     barge_in_yield_ms: int = 100
     false_trigger_rate: float = 0.0
+    false_trigger_seed: int | None = 0
     latency_budget: LatencyBudget | None = None
 
     async def run(self, conversation: Conversation) -> ConversationRun:
         history: list[Turn] = []
         runs: list[TurnRun] = []
         played = 0
+        # A fresh Random is constructed per-conversation so two pipelines
+        # that share `false_trigger_seed` produce identical injections on
+        # identical golden sets — important for the corpus eval, where any
+        # reseeding strategy that looked at wall-clock time would make the
+        # baseline drift turn-by-turn.
+        rng = (
+            random.Random(self.false_trigger_seed)  # noqa: S311 - eval RNG, not crypto
+            if self.false_trigger_rate > 0
+            else None
+        )
         for i, user_turn in enumerate(_user_turns(conversation.turns)):
             played += 1
             stt_text, stt_spans = await self.stt.transcribe(user_turn)
@@ -334,21 +359,23 @@ class VoicePipeline:
                     spans=spans,
                 )
             )
-            history.append(user_turn)
-
-        # Optionally inject false triggers (one synthetic at the end) for
-        # eval-harness exercise.
-        if self.false_trigger_rate > 0 and runs:
-            runs.append(
-                TurnRun(
-                    user_turn_index=len(runs),
-                    transcribed_text="",
-                    agent_reply="...?",
-                    interrupted=False,
-                    false_trigger=True,
-                    spans=[],
+            # Per-turn Bernoulli sample: one synthetic false-trigger turn
+            # gets appended right after this user turn whenever the draw
+            # falls under the configured rate. The previous "if rate > 0,
+            # append exactly one at the end" behaviour treated 0.2 and 1.0
+            # the same — false_trigger_rate is now an actual rate.
+            if rng is not None and rng.random() < self.false_trigger_rate:
+                runs.append(
+                    TurnRun(
+                        user_turn_index=len(runs),
+                        transcribed_text="",
+                        agent_reply="...?",
+                        interrupted=False,
+                        false_trigger=True,
+                        spans=[],
+                    )
                 )
-            )
+            history.append(user_turn)
 
         run = ConversationRun(
             conv_id=conversation.conv_id,

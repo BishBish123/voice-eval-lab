@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from voice_eval_lab.eval.golden import default_golden_set
-from voice_eval_lab.models import Turn, TurnRole
+from voice_eval_lab.models import Conversation, Turn, TurnRole
 from voice_eval_lab.pipeline import MockLLM, MockSTT, MockTTS, VoicePipeline
 
 
@@ -47,6 +47,66 @@ class TestPipelineRun:
         )
         run = await pipeline.run(default_golden_set()[0])
         assert any(tr.false_trigger for tr in run.turn_runs)
+
+    async def test_false_trigger_rate_zero_injects_none(self) -> None:
+        pipeline = VoicePipeline(
+            stt=MockSTT(), llm=MockLLM(), tts=MockTTS(), false_trigger_rate=0.0
+        )
+        run = await pipeline.run(default_golden_set()[0])
+        assert all(not tr.false_trigger for tr in run.turn_runs)
+
+    async def test_false_trigger_rate_one_injects_every_turn(self) -> None:
+        # rate=1.0 means a false-trigger after every user turn — the
+        # pipeline emits N user turn-runs interleaved with N synthetic
+        # false-trigger turn-runs.
+        pipeline = VoicePipeline(
+            stt=MockSTT(), llm=MockLLM(), tts=MockTTS(), false_trigger_rate=1.0
+        )
+        conv = default_golden_set()[0]
+        n_user = sum(1 for t in conv.turns if t.role.value == "user")
+        run = await pipeline.run(conv)
+        assert sum(1 for tr in run.turn_runs if tr.false_trigger) == n_user
+        assert len(run.turn_runs) == 2 * n_user
+
+    async def test_false_trigger_rate_injects_per_turn(self) -> None:
+        # Bernoulli per turn with a fixed seed — over a long synthetic
+        # conversation we expect ~rate * N injections, and the count must
+        # be deterministic for that seed (the count is what the eval harness
+        # exposes via false_trigger_rate, so reproducibility matters).
+        n = 200
+        turns = [
+            Turn(role=TurnRole.USER, text=f"hi {i}", started_at_ms=i * 1000, ended_at_ms=i * 1000 + 500)
+            for i in range(n)
+        ]
+        conv = Conversation(conv_id="long", topic="t", turns=turns, gold_facts=[])
+
+        pipeline_a = VoicePipeline(
+            stt=MockSTT(),
+            llm=MockLLM(),
+            tts=MockTTS(),
+            false_trigger_rate=0.5,
+            false_trigger_seed=42,
+        )
+        run_a = await pipeline_a.run(conv)
+        injected_a = sum(1 for tr in run_a.turn_runs if tr.false_trigger)
+
+        # Same seed -> same draws.
+        pipeline_b = VoicePipeline(
+            stt=MockSTT(),
+            llm=MockLLM(),
+            tts=MockTTS(),
+            false_trigger_rate=0.5,
+            false_trigger_seed=42,
+        )
+        run_b = await pipeline_b.run(conv)
+        injected_b = sum(1 for tr in run_b.turn_runs if tr.false_trigger)
+        assert injected_a == injected_b
+        # 0.5 * 200 = 100 expected; allow generous slack for Bernoulli noise
+        # while still rejecting the old "any rate > 0 -> exactly one" bug.
+        assert 70 < injected_a < 130
+        # And materially different from the rate=1.0 ceiling (which would
+        # be 200) and rate=0 floor (0).
+        assert 0 < injected_a < n
 
     async def test_llm_surfaces_matching_gold_fact(self) -> None:
         pipeline = VoicePipeline(stt=MockSTT(), llm=MockLLM(), tts=MockTTS())
