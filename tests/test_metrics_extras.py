@@ -12,6 +12,7 @@ from voice_eval_lab.eval.metrics import (
     IncompleteRunError,
     barge_in_latency_p95_ms,
     endpointing_accuracy,
+    false_trigger_rate,
     llm_decisiveness,
     score_conversation,
     score_run,
@@ -620,9 +621,10 @@ class TestAggregatePooledRatios:
         assert report.aggregate_faithfulness == pytest.approx(26 / 51)
 
     def test_aggregate_false_trigger_uses_pooled_turns(self) -> None:
-        # Short conversation (1 turn, 1 false-trigger) -> 100% per-conv.
-        # Long conversation (50 turns, 0 false-triggers) -> 0% per-conv.
-        # Mean = 50%, pooled = 1/51 ~= 0.02.
+        # Short conversation (1 user turn, 1 false-trigger) -> 100% per-conv.
+        # Long conversation (50 user turns, 0 false-triggers) -> 0% per-conv.
+        # Mean = 50%, pooled = 1/51 ~= 0.02. Pooled denominator is the
+        # user-turn count across the run, not len(turn_runs).
         conv_short = make_conv([make_user("u1")], conv_id="short")
         run_short = make_run(
             [make_turn_run(false_trigger=True)],
@@ -766,3 +768,84 @@ class TestAggregateWERCorpusPool:
         assert report.aggregate_wer == pytest.approx(100 / 1002, rel=1e-6)
         # Sanity check: this is far from the (0 + 0.1) / 2 = 0.05 a mean would give.
         assert report.aggregate_wer > 0.09
+
+
+# ---------------------------------------------------------------------------
+# False-trigger rate denominator semantics
+# ---------------------------------------------------------------------------
+
+
+class TestFalseTriggerDenominator:
+    """false_trigger_rate is K / (user-turn opportunities), not K / (N + K).
+
+    The pipeline injects synthetic false-trigger turns as *extra* TurnRuns
+    appended to the run. Dividing by ``len(run.turn_runs)`` would give
+    ``K / (N + K)``: a configured rate of 1.0 over N user turns would max
+    out at 0.5 instead of the conceptually correct 1.0. The denominator
+    is the count of user-turn opportunities the pipeline could have
+    sampled.
+    """
+
+    def test_false_trigger_rate_denominator_is_user_turns(self) -> None:
+        # 5 user turns, every one followed by an injected synthetic
+        # false-trigger turn (rate=1.0 emulation). Run has 10 turn_runs
+        # but the metric must read 5/5 = 1.0, not 5/10 = 0.5.
+        user_turns = [
+            make_user(f"u{i}", start=i * 1000, end=i * 1000 + 500) for i in range(5)
+        ]
+        conv = make_conv(user_turns, conv_id="ft")
+        runs = []
+        for i in range(5):
+            runs.append(make_turn_run(user_turn_index=i))
+            runs.append(
+                make_turn_run(false_trigger=True, user_turn_index=i, reply="???")
+            )
+        run = make_run(runs, conv_id="ft")
+        assert false_trigger_rate(conv, run) == pytest.approx(1.0)
+        # Sanity: the old K / len(turn_runs) bug would have yielded 0.5.
+        assert false_trigger_rate(conv, run) != 0.5
+
+    def test_false_trigger_rate_partial_rate(self) -> None:
+        # 4 user turns, 1 injected synthetic -> 1/4 = 0.25.
+        user_turns = [
+            make_user(f"u{i}", start=i * 1000, end=i * 1000 + 500) for i in range(4)
+        ]
+        conv = make_conv(user_turns, conv_id="ft")
+        runs = [make_turn_run(user_turn_index=i) for i in range(4)]
+        runs.append(make_turn_run(false_trigger=True, user_turn_index=0, reply="???"))
+        run = make_run(runs, conv_id="ft")
+        assert false_trigger_rate(conv, run) == pytest.approx(0.25)
+
+    def test_pooled_false_trigger_rate_uses_user_turn_count(self) -> None:
+        # Two conversations both at configured rate=1.0:
+        # - conv A: 2 user turns, 2 injected synthetics -> per-conv 2/2 = 1.0
+        # - conv B: 3 user turns, 3 injected synthetics -> per-conv 3/3 = 1.0
+        # Pooled aggregate = (2 + 3) / (2 + 3) = 1.0 (not 5/10 = 0.5).
+        conv_a_turns = [
+            make_user(f"a{i}", start=i * 1000, end=i * 1000 + 500) for i in range(2)
+        ]
+        conv_a = make_conv(conv_a_turns, conv_id="a")
+        run_a_runs = []
+        for i in range(2):
+            run_a_runs.append(make_turn_run(user_turn_index=i))
+            run_a_runs.append(
+                make_turn_run(false_trigger=True, user_turn_index=i, reply="???")
+            )
+        run_a = make_run(run_a_runs, conv_id="a")
+
+        conv_b_turns = [
+            make_user(f"b{i}", start=i * 1000, end=i * 1000 + 500) for i in range(3)
+        ]
+        conv_b = make_conv(conv_b_turns, conv_id="b")
+        run_b_runs = []
+        for i in range(3):
+            run_b_runs.append(make_turn_run(user_turn_index=i))
+            run_b_runs.append(
+                make_turn_run(false_trigger=True, user_turn_index=i, reply="???")
+            )
+        run_b = make_run(run_b_runs, conv_id="b")
+
+        report = score_run([(conv_a, run_a), (conv_b, run_b)])
+        assert report.aggregate_false_trigger_rate == pytest.approx(1.0)
+        # The injected-extras-in-denominator bug would have given 5/10 = 0.5.
+        assert report.aggregate_false_trigger_rate != pytest.approx(0.5)

@@ -251,16 +251,30 @@ def barge_in_success_rate(
     return yielded / total
 
 
-def _false_trigger_counts(run: ConversationRun) -> tuple[int, int]:
-    """Return (false_trigger_turns, total_turn_runs)."""
-    return sum(1 for tr in run.turn_runs if tr.false_trigger), len(run.turn_runs)
+def _false_trigger_counts(
+    conversation: Conversation, run: ConversationRun
+) -> tuple[int, int]:
+    """Return (false_trigger_turns, user_turn_opportunities).
+
+    The denominator is the count of *user turns* in the source
+    conversation, not ``len(run.turn_runs)``. The pipeline injects
+    synthetic false-trigger turns as additional ``TurnRun`` entries
+    appended to the run, so dividing by ``len(run.turn_runs)`` gives
+    ``K / (N + K)``: at a configured rate of 1.0 over N user turns the
+    metric maxes out at 0.5 instead of the conceptually correct 1.0.
+    Counting *opportunities* (user turns) keeps the metric a per-user-turn
+    rate independent of how many extras were appended.
+    """
+    triggers = sum(1 for tr in run.turn_runs if tr.false_trigger)
+    user_turn_count = sum(1 for t in conversation.turns if t.role is TurnRole.USER)
+    return triggers, user_turn_count
 
 
-def false_trigger_rate(run: ConversationRun) -> float:
-    triggers, total = _false_trigger_counts(run)
-    if total == 0:
+def false_trigger_rate(conversation: Conversation, run: ConversationRun) -> float:
+    triggers, user_turns = _false_trigger_counts(conversation, run)
+    if user_turns == 0:
         return 0.0
-    return triggers / total
+    return triggers / user_turns
 
 
 def barge_in_latency_p95_ms(run: ConversationRun) -> float:
@@ -419,7 +433,7 @@ def score_conversation(
         barge_in_success_rate=barge_in_success_rate(
             conversation, run, barge_in_budget_ms=barge_in_budget_ms
         ),
-        false_trigger_rate=false_trigger_rate(run),
+        false_trigger_rate=false_trigger_rate(conversation, run),
         barge_in_latency_p95_ms=barge_in_latency_p95_ms(run),
         tts_first_byte_jitter_ms=tts_first_byte_jitter_ms(run),
         endpointing_accuracy=endpointing_accuracy(conversation, run),
@@ -500,7 +514,7 @@ def _pool_run_samples(
         grounded, ground_total = _faithfulness_counts(c, r)
         pool.grounded_replies += grounded
         pool.grounded_total += ground_total
-        ft_turns, ft_total = _false_trigger_counts(r)
+        ft_turns, ft_total = _false_trigger_counts(c, r)
         pool.false_trigger_turns += ft_turns
         pool.false_trigger_total += ft_total
         decisive, dec_total = _decisiveness_counts(r)

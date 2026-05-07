@@ -291,10 +291,16 @@ class TestBargeIn:
 
 class TestFalseTriggerRate:
     def test_zero_when_no_runs(self) -> None:
+        conv = _conv([])
         run = ConversationRun(conv_id="c", topic="t", user_turns_played=0, turn_runs=[])
-        assert false_trigger_rate(run) == 0.0
+        assert false_trigger_rate(conv, run) == 0.0
 
     def test_proportional(self) -> None:
+        # 1 user turn (the opportunity) + 1 injected synthetic false-trigger
+        # turn appended to the run -> rate = 1/1 = 1.0. The denominator is
+        # *opportunities*, not total turn_runs, so injected extras don't
+        # depress the headline.
+        conv = _conv([_user("hello")])
         run = _run(
             [
                 _turn_run(transcribed="x", reply="y", vad_end_ms=0, first_byte_ms=10),
@@ -303,7 +309,7 @@ class TestFalseTriggerRate:
                 ),
             ]
         )
-        assert false_trigger_rate(run) == 0.5
+        assert false_trigger_rate(conv, run) == 1.0
 
 
 # ---------------------------------------------------------------------------
