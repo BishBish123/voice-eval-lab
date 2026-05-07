@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>voice-eval-lab</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>voice-eval-lab</h1>
+      <p class="subtitle">LiveKit voice session</p>
+    </header>
+
+    <!-- No-backend banner (shown when livekit_token is null) -->
+    <div id="no-backend-banner" class="banner banner-warn" hidden>
+      <strong>No LiveKit backend configured.</strong>
+      <p>
+        Set <code>LIVEKIT_API_KEY</code> and <code>LIVEKIT_API_SECRET</code>
+        before starting <code>voice-eval serve</code>, then reload this page.
+      </p>
+      <pre>export LIVEKIT_API_KEY=your_key
+export LIVEKIT_API_SECRET=your_secret
+voice-eval serve</pre>
+    </div>
+
+    <!-- Error banner -->
+    <div id="error-banner" class="banner banner-error" hidden>
+      <strong>Error: </strong><span id="error-message"></span>
+    </div>
+
+    <!-- Controls -->
+    <div id="controls">
+      <button id="start-session" type="button">Start session</button>
+      <button id="end-session" type="button" disabled>End session</button>
+    </div>
+
+    <!-- Connection state -->
+    <div id="status-area">
+      <span id="connection-status" class="status-idle">Idle</span>
+    </div>
+
+    <!-- Audio waveform canvas -->
+    <canvas id="waveform" width="600" height="80" hidden></canvas>
+
+    <!-- Live transcript -->
+    <div id="transcript-container" hidden>
+      <h2>Transcript</h2>
+      <div id="transcript"></div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

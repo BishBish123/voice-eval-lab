@@ -16,17 +16,25 @@ starts), not streaming / interleaved latency.  ``MockLLM.stream``
 exists as a Protocol exercise but is not wired into ``VoicePipeline.run``;
 the latency numbers reported by the eval reflect the full round-trip, not
 the time-to-first-token.
+
+Latency variation: ``deterministic_latency_ms`` produces realistic
+per-component spread (p50 ~= base, p95 ~= 1.4x, p99 ~= 2.5-2.9x) from
+a Blake2b-derived value so results are fully reproducible across runs.
+A 5% long-tail outlier multiplier (2.5-3x) simulates real-world spikes.
+Measured over 10,000 samples at base=80ms: p95 ≈ 1.40x, p99 ≈ 2.90x.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import random
 import re
+import struct
 import unicodedata
 from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from voice_eval_lab.models import (
     Conversation,
@@ -36,6 +44,9 @@ from voice_eval_lab.models import (
     TurnRole,
     TurnRun,
 )
+
+if TYPE_CHECKING:
+    from voice_eval_lab.audio.protocol import AudioFixtureStore
 
 
 class STT(Protocol):
@@ -58,6 +69,59 @@ class TTS(Protocol):
 
 
 # ---------------------------------------------------------------------------
+# Deterministic latency jitter
+# ---------------------------------------------------------------------------
+
+
+def deterministic_latency_ms(
+    base_ms: int,
+    conv_id: str,
+    turn_index: int,
+    component: str,
+    *,
+    spread_frac: float = 0.40,
+    outlier_prob: float = 0.05,
+    outlier_mult: float = 2.5,
+) -> int:
+    """Return a reproducible latency value derived from (conv_id, turn_index, component).
+
+    Distribution shape:
+    - Core: uniform noise within +/-spread_frac of base_ms.
+    - 5% of draws (outlier_prob) are multiplied by outlier_mult (2.5-3x) to
+      simulate real-world long-tail spikes (GC pauses, network jitter, etc.).
+    - Uses Blake2b of the compound key into two uint64 values combined into
+      a float in [0,1). NOT random.random() -- fully reproducible per input.
+
+    Typical result with defaults (base=80, spread=0.40, outlier_prob=0.05):
+    - p50 ~= base_ms (80 ms)
+    - p95 ~= 1.40x base_ms (~112 ms) — top of the core uniform band [0.6x, 1.4x)
+    - p99 ~= 2.5-2.9x base_ms (~200-232 ms) — within the outlier band [2.5x, 3.0x)
+
+    Verified by sampling 10,000 inputs (base=80): p50=81, p95=112, p99=232.
+    """
+    key = f"{conv_id}:{turn_index}:{component}".encode()
+    digest = hashlib.blake2b(key, digest_size=16).digest()
+    # Extract two independent uint64 values from the 16-byte digest.
+    lo, hi = struct.unpack("<QQ", digest)
+    # Map to [0, 1) using the full 64-bit range.
+    r_core = lo / (2**64)        # uniform noise selector
+    r_outlier = hi / (2**64)     # outlier selector
+
+    if r_outlier < outlier_prob:
+        # Long-tail outlier: 2.5x base for the worst draws; varies between
+        # outlier_mult and outlier_mult + 0.5 depending on r_core.
+        jittered = base_ms * (outlier_mult + 0.5 * r_core)
+    else:
+        # Core: uniform in [base * (1 - spread), base * (1 + spread)]
+        lo_bound = base_ms * (1.0 - spread_frac)
+        hi_bound = base_ms * (1.0 + spread_frac)
+        jittered = lo_bound + r_core * (hi_bound - lo_bound)
+
+    result: int = round(jittered)
+    return max(1, result)
+
+
+# ---------------------------------------------------------------------------
 # Mock adapters — deterministic, single-process
 # ---------------------------------------------------------------------------
 
@@ -69,10 +133,18 @@ class MockSTT:
     The substitution rate can be overridden per-turn via
     `Turn.wer_substitution_rate`, which is useful for A/B-style scenarios
     where a single conversation should mix clean and noisy audio.
+
+    When ``_conv_id`` and ``_turn_index`` are set (by ``VoicePipeline.run``
+    before each call), latency is derived from ``deterministic_latency_ms``
+    so each turn produces a reproducible-but-varied value. When unset the
+    flat ``latency_ms`` constant is used, preserving existing test semantics.
     """
 
     wer_substitution_rate: float = 0.0
     latency_ms: int = 80
+    # Set by VoicePipeline.run before each adapter call to enable per-turn jitter.
+    _conv_id: str = field(default="", repr=False)
+    _turn_index: int = field(default=-1, repr=False)
 
     async def transcribe(self, turn: Turn) -> tuple[str, list[PipelineSpan]]:
         rate = (
@@ -81,11 +153,16 @@ class MockSTT:
             else self.wer_substitution_rate
         )
         text = _inject_wer(turn.text, rate)
+        lat = (
+            deterministic_latency_ms(self.latency_ms, self._conv_id, self._turn_index, "stt")
+            if self._turn_index >= 0
+            else self.latency_ms
+        )
         spans = [
             PipelineSpan(
                 name="stt.transcribe",
                 started_at_ms=turn.ended_at_ms,
-                ended_at_ms=turn.ended_at_ms + self.latency_ms,
+                ended_at_ms=turn.ended_at_ms + lat,
                 attrs={"engine": "mock", "wer_injected": str(rate)},
             )
         ]
@@ -102,9 +179,15 @@ class MockLLM:
     NFKC variants, and runs of whitespace. The earlier raw-substring
     check produced 0% faithfulness on conversations whose users phrased
     fact tokens with spaces while the fact stored them with underscores.
+
+    When ``_conv_id`` and ``_turn_index`` are set (by ``VoicePipeline.run``
+    before each call), latency is derived from ``deterministic_latency_ms``.
     """
 
     latency_ms: int = 120
+    # Set by VoicePipeline.run before each adapter call to enable per-turn jitter.
+    _conv_id: str = field(default="", repr=False)
+    _turn_index: int = field(default=-1, repr=False)
 
     async def reply(
         self,
@@ -118,11 +201,16 @@ class MockLLM:
             None,
         )
         text = match if match else f"I don't have a confident answer about {last_user_text!r}."
+        lat = (
+            deterministic_latency_ms(self.latency_ms, self._conv_id, self._turn_index, "llm")
+            if self._turn_index >= 0
+            else self.latency_ms
+        )
         spans = [
             PipelineSpan(
                 name="llm.reply",
                 started_at_ms=0,
-                ended_at_ms=self.latency_ms,
+                ended_at_ms=lat,
                 attrs={"model": "mock", "history_len": str(len(history))},
             )
         ]
@@ -150,18 +238,32 @@ class MockLLM:
 
 @dataclass
 class MockTTS:
+    """Mock TTS adapter.
+
+    When ``_conv_id`` and ``_turn_index`` are set (by ``VoicePipeline.run``
+    before each call), latency is derived from ``deterministic_latency_ms``.
+    """
+
     first_byte_ms: int = 75
+    # Set by VoicePipeline.run before each adapter call to enable per-turn jitter.
+    _conv_id: str = field(default="", repr=False)
+    _turn_index: int = field(default=-1, repr=False)
 
     async def synthesize(self, text: str) -> tuple[int, list[PipelineSpan]]:
+        lat = (
+            deterministic_latency_ms(self.first_byte_ms, self._conv_id, self._turn_index, "tts")
+            if self._turn_index >= 0
+            else self.first_byte_ms
+        )
         spans = [
             PipelineSpan(
                 name="tts.synthesize",
                 started_at_ms=0,
-                ended_at_ms=self.first_byte_ms,
+                ended_at_ms=lat,
                 attrs={"engine": "mock", "chars": str(len(text))},
             )
         ]
-        return self.first_byte_ms, spans
+        return lat, spans
 
 
 @dataclass
@@ -312,13 +414,53 @@ class VoicePipeline:
     false_trigger_seed: int | None = 0
     latency_budget: LatencyBudget | None = None
 
-    async def run(self, conversation: Conversation) -> ConversationRun:
+    async def run(
+        self,
+        conversation: Conversation,
+        audio_store: AudioFixtureStore | None = None,
+    ) -> ConversationRun:
+        """Run the pipeline over *conversation*, optionally attaching audio fixtures.
+
+        Parameters
+        ----------
+        conversation:
+            The conversation to process.
+        audio_store:
+            Optional ``AudioFixtureStore``.  When provided, looks up audio for
+            each user turn by ``(conv_id, turn_index)`` and attaches the bytes
+            to the ``Turn.audio_bytes`` field before calling the STT adapter.
+            This is what enables real-mode Deepgram in eval runs.
+        """
         history: list[Turn] = []
         runs: list[TurnRun] = []
         played = 0
         for i, user_turn in enumerate(_user_turns(conversation.turns)):
             played += 1
-            stt_text, stt_spans = await self.stt.transcribe(user_turn)
+            # Propagate turn context to adapters that support per-turn jitter
+            # (i.e. the Mock* adapters). Real adapters won't have these attrs
+            # and the hasattr check keeps the Protocol boundary clean.
+            if hasattr(self.stt, "_conv_id"):
+                self.stt._conv_id = conversation.conv_id
+                if hasattr(self.stt, "_turn_index"):
+                    self.stt._turn_index = i
+            if hasattr(self.llm, "_conv_id"):
+                self.llm._conv_id = conversation.conv_id
+                if hasattr(self.llm, "_turn_index"):
+                    self.llm._turn_index = i
+            if hasattr(self.tts, "_conv_id"):
+                self.tts._conv_id = conversation.conv_id
+                if hasattr(self.tts, "_turn_index"):
+                    self.tts._turn_index = i
+            # Attach audio fixture bytes when an audio_store is supplied.
+            # Use a separate name to avoid overwriting the loop variable
+            # (which would trigger PLW2901). model_copy creates a shallow
+            # copy so the original golden-set object is never mutated.
+            stt_turn = user_turn
+            if audio_store is not None:
+                audio_bytes = audio_store.get_audio(conversation.conv_id, i)
+                if audio_bytes is not None:
+                    stt_turn = user_turn.model_copy(update={"audio_bytes": audio_bytes})
+            stt_text, stt_spans = await self.stt.transcribe(stt_turn)
             llm_text, llm_spans = await self.llm.reply(history, stt_text, conversation.gold_facts)
             tts_first_byte, tts_spans = await self.tts.synthesize(llm_text)
 

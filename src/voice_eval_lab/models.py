@@ -27,6 +27,17 @@ class Turn(BaseModel):
         le=1.0,
         description="Per-turn override for the mock STT word substitution rate (0..1).",
     )
+    # Raw WAV bytes attached by the eval harness when audio fixtures are present.
+    # None in mock/text-only mode; populated from FilesystemAudioStore before
+    # the STT adapter is called so real adapters (e.g. Deepgram) receive audio.
+    audio_bytes: bytes | None = Field(
+        default=None,
+        description=(
+            "Raw WAV bytes for this turn. Populated by VoicePipeline.run when "
+            "an audio_store is provided; None in mock/text-only mode."
+        ),
+        exclude=True,  # keep out of JSON serialisation — it's a runtime annotation
+    )
 
 
 class Conversation(BaseModel):

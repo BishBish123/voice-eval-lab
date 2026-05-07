@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Voice eval report</title>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 2rem; }
+  th, td { border: 1px solid #ddd; padding: 0.4rem 0.6rem; text-align: left; }
+  th { background: #f5f5f5; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  h1 { margin-bottom: 0.3rem; }
+  h2 { margin-top: 2rem; }
+</style>
+</head>
+<body>
+<h1>Voice eval report</h1>
+<h2>Headline</h2>
+<table>
+  <thead><tr><th>Metric</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td>Conversations</td><td class='num'>7</td></tr>
+    <tr><td>Turn latency p50 / p95 / p99 (ms)</td><td class='num'>275 / 275 / 275</td></tr>
+    <tr><td>Transcription WER (corpus-pooled)</td><td class='num'>0.00%</td></tr>
+    <tr><td>Response faithfulness (corpus-pooled)</td><td class='num'>61.54%</td></tr>
+    <tr><td>Barge-in success (corpus-pooled)</td><td class='num'>100.00%</td></tr>
+    <tr><td>False-trigger rate (corpus-pooled)</td><td class='num'>0.00%</td></tr>
+    <tr><td>Barge-in yield p95 (ms)</td><td class='num'>100</td></tr>
+    <tr><td>TTS first-byte jitter (ms)</td><td class='num'>0.0</td></tr>
+    <tr><td>Endpointing accuracy (corpus-pooled)</td><td class='num'>100.00%</td></tr>
+    <tr><td>LLM decisiveness (corpus-pooled)</td><td class='num'>57.14%</td></tr>
+  </tbody>
+</table>
+<h2>Per conversation</h2>
+<table>
+  <thead><tr>
+    <th>conv_id</th><th>topic</th><th>p95 ms</th><th>WER</th>
+    <th>faithfulness</th><th>barge-in</th><th>false-trigger</th>
+    <th>yield p95</th><th>jitter</th><th>endpoint</th><th>decisive</th>
+  </tr></thead>
+  <tbody>
+    <tr><td>postgres-replication</td><td>Postgres replication basics</td><td class='num'>275</td><td class='num'>0.00%</td><td class='num'>100.00%</td><td class='num'>100.00%</td><td class='num'>0.00%</td><td class='num'>0</td><td class='num'>0.0</td><td class='num'>100.00%</td><td class='num'>100.00%</td></tr>
+    <tr><td>hnsw-tuning</td><td>HNSW index tuning</td><td class='num'>275</td><td class='num'>0.00%</td><td class='num'>50.00%</td><td class='num'>100.00%</td><td class='num'>0.00%</td><td class='num'>100</td><td class='num'>0.0</td><td class='num'>100.00%</td><td class='num'>50.00%</td></tr>
+    <tr><td>prom-burn-rate</td><td>Prometheus SLO burn rate</td><td class='num'>275</td><td class='num'>0.00%</td><td class='num'>100.00%</td><td class='num'>100.00%</td><td class='num'>0.00%</td><td class='num'>0</td><td class='num'>0.0</td><td class='num'>100.00%</td><td class='num'>100.00%</td></tr>
+    <tr><td>empty-noise</td><td>False-trigger handling</td><td class='num'>275</td><td class='num'>0.00%</td><td class='num'>100.00%</td><td class='num'>100.00%</td><td class='num'>0.00%</td><td class='num'>0</td><td class='num'>0.0</td><td class='num'>100.00%</td><td class='num'>0.00%</td></tr>
+    <tr><td>agent-led-debug</td><td>Agent-led debugging session</td><td class='num'>275</td><td class='num'>0.00%</td><td class='num'>66.67%</td><td class='num'>100.00%</td><td class='num'>0.00%</td><td class='num'>0</td><td class='num'>0.0</td><td class='num'>100.00%</td><td class='num'>66.67%</td></tr>
+    <tr><td>noisy-vad</td><td>Noisy VAD endpointing</td><td class='num'>275</td><td class='num'>0.00%</td><td class='num'>50.00%</td><td class='num'>100.00%</td><td class='num'>0.00%</td><td class='num'>0</td><td class='num'>0.0</td><td class='num'>100.00%</td><td class='num'>50.00%</td></tr>
+    <tr><td>double-barge</td><td>Two consecutive barge-ins</td><td class='num'>275</td><td class='num'>0.00%</td><td class='num'>33.33%</td><td class='num'>100.00%</td><td class='num'>0.00%</td><td class='num'>100</td><td class='num'>0.0</td><td class='num'>100.00%</td><td class='num'>33.33%</td></tr>
+  </tbody>
+</table>
+</body>
+</html>

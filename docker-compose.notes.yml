@@ -1,0 +1,35 @@
+version: "3.9"
+
+# Opt-in compose file for local pgvector development.
+# Usage:
+#   make notes-up          # start the container
+#   make notes-down        # stop and remove the container
+#
+# Then point PgVectorNotesStore at it:
+#   export NOTES_DSN="postgresql://vel:vel@localhost:5433/vel"
+#   voice-eval notes lookup --query "postgres"
+#
+# The image uses pgvector/pgvector:pg16 which ships the pgvector extension
+# pre-installed (no manual CREATE EXTENSION needed — the store DDL creates
+# the table; the extension is already available in the image).
+
+services:
+  pgvector:
+    image: pgvector/pgvector:pg16
+    container_name: vel_pgvector
+    environment:
+      POSTGRES_USER: vel
+      POSTGRES_PASSWORD: vel
+      POSTGRES_DB: vel
+    ports:
+      - "5433:5432"
+    volumes:
+      - vel_pgvector_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vel -d vel"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  vel_pgvector_data:

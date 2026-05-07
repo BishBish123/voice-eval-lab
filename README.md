@@ -52,7 +52,7 @@ What's here:
   - **LLM decisiveness** — fraction of replies that don't hedge
 - Pipeline middleware: `RetryingTTS` decorator + `LatencyBudget`
   that flags turns past a wall-clock ceiling.
-- A bundled 7-conversation golden set covering every metric path.
+- A bundled 25-conversation golden set covering every metric path across seven failure-mode categories.
 - A `voice-eval` CLI with five subcommands: `run`, `list`,
   `baseline`, `compare`, `render`.
 
@@ -86,16 +86,16 @@ Produces (with the bundled mock pipeline + golden set):
 
 | Metric | Value |
 | --- | ---: |
-| Conversations | 7 |
-| Turn latency p50 / p95 / p99 (ms) | 275 / 275 / 275 |
+| Conversations | 25 |
+| Turn latency p50 / p95 / p99 (ms) | 278 / 478 / 629 |
 | Transcription WER (corpus-pooled) | 0.00% |
-| Response faithfulness (corpus-pooled) | 61.54% |
+| Response faithfulness (corpus-pooled) | 68.00% ([why?](evals/INTERPRETATION.md#response-faithfulness-corpus-pooled)) |
 | Barge-in success (corpus-pooled) | 100.00% |
 | False-trigger rate (corpus-pooled) | 0.00% |
 | Barge-in yield p95 (ms) | 100 |
-| TTS first-byte jitter (ms) | 0.0 |
+| TTS first-byte jitter (ms) | 94.4 |
 | Endpointing accuracy (corpus-pooled) | 100.00% |
-| LLM decisiveness (corpus-pooled) | 57.14% |
+| LLM decisiveness (corpus-pooled) | 62.26% |
 
 The mock STT is lossless by construction, so the canonical run
 reports 0% WER. To exercise the WER metric path, inject substitutions
@@ -134,6 +134,53 @@ same shape.
 
 `evals/INTERPRETATION.md` is the cheat-sheet for what each value
 means and what good / bad looks like in production.
+
+## Browser frontend
+
+A static HTML + vanilla JS frontend is served by the FastAPI backend.
+No build step, no React, no bundler — just three files in
+`src/voice_eval_lab/backend/static/`.
+
+### Running it
+
+```bash
+voice-eval serve            # binds 0.0.0.0:8000 by default
+# then open http://localhost:8000/
+```
+
+### UI elements
+
+| Element | Description |
+|---|---|
+| **Start session** button | Calls `POST /sessions`. Receives a `session_id` and, when LiveKit credentials are configured, a `livekit_token`. |
+| **No backend wired** banner | Shown (yellow) when `livekit_token` is `null` — includes the env vars to set and the command to restart. |
+| **End session** button | Calls `POST /sessions/{id}/end`, disconnects from LiveKit, stops the transcript stream. |
+| **Waveform canvas** | Visualises the microphone or agent audio track in real time via the Web Audio API. |
+| **Transcript area** | Live user/agent turns streamed from `GET /sessions/{id}/events` (Server-Sent Events). |
+
+### UX states
+
+- **Idle** — no session active.
+- **No-LiveKit** — `livekit_token` was `null`; yellow banner shown; SSE mock transcript still streams.
+- **Connecting** — LiveKit SDK loaded from CDN, `Room.connect()` in progress.
+- **Connected** — room joined; waveform and SSE transcript active.
+- **Error** — red banner with message; "Start session" re-enabled.
+- **Ended** — session closed cleanly.
+
+### LiveKit credentials (optional)
+
+```bash
+export LIVEKIT_API_KEY=your_key
+export LIVEKIT_API_SECRET=your_secret   # ≥32 bytes recommended
+voice-eval serve
+```
+
+Without these the page loads and shows the no-backend banner with
+instructions. The SSE mock transcript stream still works so you can
+verify the UI without a LiveKit account.
+
+> Screenshot / asciinema: see the [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+> section on the browser frontend for a walkthrough.
 
 ## Architecture
 
@@ -256,10 +303,352 @@ pipeline = VoicePipeline(
 The harness doesn't care which adapters you use — it scores whatever
 spans the pipeline emits.
 
+## Real adapters
+
+`src/voice_eval_lab/adapters/` contains stub adapters for all three
+services plus a local Whisper STT option. Each one reads its API key (or
+gate env var) at instantiation time. When the key is absent the adapter
+delegates to the mock pipeline with deterministic-jitter latency. When
+the key is set, the adapter makes real calls; failures fall back to mock
+with a logged warning.
+
+| Adapter | Env var | Endpoint / Runtime | Request shape |
+|---|---|---|---|
+| `DeepgramSTT` | `DEEPGRAM_API_KEY` | `POST api.deepgram.com/v1/listen` | audio/wav body (real audio bytes required — see note below), `model=nova-3&smart_format=true` |
+| `WhisperSTT` | `WHISPER_MODEL_NAME` | local inference (no cloud) | 16-bit mono WAV at any rate; resampled to 16kHz before transcription |
+| `GroqLLM` | `GROQ_API_KEY` | `POST api.groq.com/openai/v1/chat/completions` | OpenAI chat format, `model=llama-3.3-70b-versatile` |
+| `CartesiaTTS` | `CARTESIA_API_KEY` | `POST api.cartesia.ai/tts/bytes` | JSON body, `model_id=sonic-2`, raw PCM output; `Authorization: Bearer <key>` |
+| `ElevenLabsTTS` | `ELEVENLABS_API_KEY` | `POST api.elevenlabs.io/v1/text-to-speech/{voice_id}` | JSON body, `model_id=eleven_turbo_v2_5`, PCM output (`output_format=pcm_16000`); `xi-api-key: <key>` |
+
+> **DeepgramSTT real-mode note:** Deepgram pre-recorded STT requires actual
+> audio bytes — a valid WAV/PCM file. The mock pipeline operates on text-only
+> `Turn` objects and has no audio source.  When `DEEPGRAM_API_KEY` is set but
+> the turn has no `audio_bytes` attribute, `DeepgramSTT` logs a warning and
+> falls back to mock rather than posting invalid data.  Real-mode Deepgram
+> requires audio bytes; the real HTTP path is gated behind future fixture
+> support (e.g. pre-recorded WAV files keyed by `(conv_id, turn_index)`).
+
+### WhisperSTT — local, no cloud required
+
+`WhisperSTT` runs OpenAI's open-source Whisper model locally via the
+`openai-whisper` package (ships with PyTorch — install via `[real]`
+extras). No API key is needed. Set `WHISPER_MODEL_NAME` to activate it.
+
+| Model | Size | Speed (relative) | Recommended for |
+|---|---|---|---|
+| `tiny` | ~75 MB | fastest | development, CI smoke tests |
+| `base` | ~145 MB | fast | low-resource production |
+| `small` | ~465 MB | medium | balanced quality/speed |
+| `medium` | ~1.5 GB | slow | higher-accuracy production |
+| `large` | ~3 GB | slowest | highest accuracy |
+
+**Recommended choice:** `tiny` for development (no GPU needed, sub-1s
+on CPU for short utterances); `small` or `medium` for production on a
+machine with a GPU.
+
+```bash
+export WHISPER_MODEL_NAME=tiny   # or base / small / medium / large
+
+# Auto-dispatch via factory (whisper wins when Deepgram key is absent):
+uv run voice-eval run --out evals/REPORT.md
+
+# Explicit --stt flag (overrides env-var auto-detection):
+uv run voice-eval run --stt whisper --out evals/REPORT.md
+```
+
+The model is **lazy-loaded** — no weights are downloaded at `import`
+time. The first `transcribe` call triggers `whisper.load_model()`.
+When `openai-whisper` is not installed the adapter falls back to
+`MockSTT` automatically (no exception raised).
+
+**`make_stt()` factory dispatch** (used by `--stt auto`):
+
+1. `DEEPGRAM_API_KEY` set (with or without `WHISPER_MODEL_NAME`) → `DeepgramSTT`
+   (cloud wins: faster + higher quality).
+2. `WHISPER_MODEL_NAME` set (Deepgram key absent) → `WhisperSTT`.
+3. Neither set → `MockSTT` (default, no deps).
+
+### ElevenLabsTTS — cloud TTS, no extra deps
+
+`ElevenLabsTTS` calls the ElevenLabs REST API (`eleven_turbo_v2_5` model, Rachel
+voice by default) and falls back to `MockTTS` when `ELEVENLABS_API_KEY` is absent.
+No additional Python packages are required — the adapter uses `httpx` (already in
+`[real]` extras) and requests PCM audio (`output_format=pcm_16000`) directly, so no
+MP3 decoding step is needed.
+
+Auth verified against https://elevenlabs.io/docs/api-reference/text-to-speech/convert
+on 2026-05-06: header is `xi-api-key: <key>` (not `Authorization: Bearer`).
+
+| Env var | Description | Default |
+|---|---|---|
+| `ELEVENLABS_API_KEY` | Required for real calls | — (mock path when absent) |
+| `ELEVENLABS_VOICE_ID` | ElevenLabs voice ID | `21m00Tcm4TlvDq8ikWAM` (Rachel) |
+
+```bash
+export ELEVENLABS_API_KEY=...
+# Optional: override the default Rachel voice
+export ELEVENLABS_VOICE_ID=pNInz6obpgDQGcFmaJgB  # Adam
+
+# Auto-dispatch via factory (elevenlabs wins when CARTESIA_API_KEY is absent):
+uv run voice-eval run --out evals/REPORT.md
+
+# Explicit --tts flag:
+uv run voice-eval run --tts elevenlabs --out evals/REPORT.md
+```
+
+**`make_tts()` factory dispatch** (used by `--tts auto`):
+
+1. `CARTESIA_API_KEY` set (with or without `ELEVENLABS_API_KEY`) → `CartesiaTTS`
+   (lower streaming latency; Cartesia wins when both are configured).
+2. `ELEVENLABS_API_KEY` set (`CARTESIA_API_KEY` absent) → `ElevenLabsTTS`.
+3. Neither set → `MockTTS` (default, no deps).
+
+**Using them:**
+
+```bash
+export GROQ_API_KEY=gsk_...
+export DEEPGRAM_API_KEY=...
+export CARTESIA_API_KEY=...
+
+uv run voice-eval run --out evals/REPORT.md --json evals/scores.json
+```
+
+```python
+from voice_eval_lab.adapters import GroqLLM, DeepgramSTT, CartesiaTTS, ElevenLabsTTS, WhisperSTT
+from voice_eval_lab.pipeline import VoicePipeline
+
+# Cloud pipeline with Cartesia TTS:
+pipeline = VoicePipeline(stt=DeepgramSTT(), llm=GroqLLM(), tts=CartesiaTTS())
+
+# Cloud pipeline with ElevenLabs TTS (custom voice):
+pipeline = VoicePipeline(stt=DeepgramSTT(), llm=GroqLLM(), tts=ElevenLabsTTS(voice_id="pNInz6obpgDQGcFmaJgB"))
+
+# No-cloud STT pipeline:
+pipeline = VoicePipeline(stt=WhisperSTT(model_name="tiny"), llm=GroqLLM(), tts=CartesiaTTS())
+```
+
+**What the eval REPORT means in mock mode (no keys set):**
+
+The mock adapters use `deterministic_latency_ms` — a Blake2b-derived
+function keyed on `(conv_id, turn_index, component)` — so every run
+produces the same values per conversation but different values across
+turns. The resulting p50/p95/p99 spread (~279/371/450ms with the default
+golden set) is a *calibration floor*, not a real measurement. It shows
+the distribution shape you would expect from a real pipeline, but the
+absolute numbers are synthetic. Replace them with real numbers by
+providing the API keys above.
+
+`httpx` and `openai-whisper` are shipped as optional dependencies in the
+`[real]` extras group:
+
+```bash
+uv sync --extra real   # installs httpx + openai-whisper; activates real adapter paths
+```
+
+The mock-only path works without either.
+
+## Pipecat pipeline
+
+`src/voice_eval_lab/pipecat/` wraps the three `STT / LLM / TTS` Protocols
+as Pipecat `FrameProcessor` subclasses and wires them into a `Pipeline`.
+
+### Pipeline shape
+
+```
+AudioRawFrame → STTProcessor → TextFrame (transcript)
+                             → LLMProcessor → TextFrame (reply)
+                                            → TTSProcessor → AudioRawFrame chunks
+```
+
+### Processor classes
+
+| Class | Protocol wrapped | Frame in | Frame out |
+|---|---|---|---|
+| `STTProcessor(adapter: STT)` | `STT.transcribe` | `AudioRawFrame` | `TextFrame` |
+| `LLMProcessor(adapter: LLM)` | `LLM.reply` | `TextFrame` (user) | `TextFrame` (agent) |
+| `TTSProcessor(adapter: TTS)` | `TTS.synthesize` | `TextFrame` (agent) | `AudioRawFrame` chunks |
+
+All three subclass Pipecat's `FrameProcessor` (or a pure-Python shim when
+`pipecat-ai` is not installed) and respect `process_frame` / `push_frame`
+semantics. Frames the processor doesn't own are forwarded downstream
+unchanged.
+
+### Run locally without LiveKit
+
+```bash
+# Drives the mock pipeline through the Pipecat processors; prints the agent reply.
+uv run voice-eval pipeline run
+```
+
+Output:
+
+```
+voice-eval pipeline run (in-memory smoke test)
+Audio source : synthetic 320-byte frame
+Pipeline     : MockSTT → MockLLM → MockTTS (via Pipecat processors)
+
+agent: I don't have a confident answer about 'hnsw ef_search parameter'.
+
+pipeline run complete
+```
+
+### Serve on a LiveKit room
+
+```bash
+# Connects the pipeline to a LiveKit room.
+# No-op with a logged warning when credentials are absent.
+uv run voice-eval pipeline serve --room my-room
+```
+
+With credentials:
+
+```bash
+export LIVEKIT_URL=wss://my-app.livekit.cloud
+export LIVEKIT_API_KEY=...
+export LIVEKIT_API_SECRET=...
+uv run voice-eval pipeline serve --room my-room
+```
+
+### Env vars
+
+| Variable | Effect |
+|---|---|
+| `LIVEKIT_URL` | LiveKit server WebSocket URL |
+| `LIVEKIT_API_KEY` | LiveKit API key |
+| `LIVEKIT_API_SECRET` | LiveKit API secret |
+
+All three must be set for `serve_on_livekit` to connect. Any missing
+credential produces a logged warning and an immediate clean return.
+
+### Optional deps
+
+`pipecat-ai` and `livekit-agents` are in the `[real]` extras group — not base deps:
+
+```bash
+uv sync --extra real   # installs pipecat-ai + livekit-agents
+```
+
+Without them, the processors use pure-Python shims and `serve_on_livekit`
+soft-fails. All tests pass either way.
+
+### Python API
+
+```python
+from voice_eval_lab.pipecat import build_pipeline, run_pipeline, make_pipecat_pipeline
+from voice_eval_lab.pipeline import MockSTT, MockLLM, MockTTS
+
+pipeline = build_pipeline(stt=MockSTT(), llm=MockLLM(), tts=MockTTS())
+# or: pipeline = make_pipecat_pipeline()
+
+async for turn in await run_pipeline(pipeline, audio_source=[my_audio_bytes]):
+    print(turn.text)  # agent reply
+```
+
+## Turn detection
+
+The Pipecat pipeline includes a `SmartTurnDetector` attached to the
+`STTProcessor`. It decides when the user has finished speaking and the
+pipeline should proceed to STT.
+
+### Modes
+
+| Mode | Flag | Behaviour |
+|---|---|---|
+| `smart` (default) | `--turn-detector smart` | Uses Pipecat's `SmartTurnAnalyzer` (ONNX model) when `pipecat-ai` is installed; falls back to energy-based silence detection (stdlib-only) otherwise. |
+| `none` | `--turn-detector none` | No-op stub — frames pass through immediately. Useful for pre-segmented audio or testing. |
+
+### Energy-based fallback algorithm
+
+When `pipecat-ai` is not installed (or `SmartTurnAnalyzer` fails to
+initialise), the detector uses a rule-based silence detector built from
+`struct` and `statistics` only — no additional dependencies:
+
+1. For each incoming 16-bit PCM chunk, compute mean-squared energy.
+2. If energy < threshold → chunk is *silent*; accumulate its duration.
+3. If energy >= threshold → chunk is *active*; reset the silence accumulator.
+4. When accumulated silence ≥ `min_silence_ms` (default 500 ms):
+   → `TurnState(is_end_of_turn=True, confidence=0.7)`
+5. Otherwise:
+   → `TurnState(is_end_of_turn=False, confidence=0.3)`
+
+### CLI usage
+
+```bash
+# Default: SmartTurnDetector (energy fallback when pipecat-ai absent)
+uv run voice-eval pipeline run
+
+# Explicit smart mode:
+uv run voice-eval pipeline run --turn-detector smart
+
+# Disable turn detection (pass-through):
+uv run voice-eval pipeline run --turn-detector none
+```
+
+### Python API
+
+```python
+from voice_eval_lab.pipecat import SmartTurnDetector, TurnState
+from voice_eval_lab.pipecat.pipeline import build_pipeline
+
+# Default: SmartTurnDetector
+pipeline = build_pipeline(stt=stt, llm=llm, tts=tts)
+
+# Explicit smart mode:
+pipeline = build_pipeline(stt=stt, llm=llm, tts=tts, turn_detector="smart")
+
+# No turn detection:
+pipeline = build_pipeline(stt=stt, llm=llm, tts=tts, turn_detector="none")
+
+# Standalone usage:
+detector = SmartTurnDetector(min_silence_ms=500, eou_threshold=0.5)
+state: TurnState = detector.analyze(raw_pcm_bytes)
+if state.is_end_of_turn:
+    # emit buffered utterance to STT
+    ...
+```
+
+## Tracing (Arize Phoenix / OTLP)
+
+Every `PipelineSpan` already has the OpenTelemetry shape.
+`src/voice_eval_lab/observability/phoenix.py` provides an OTLP exporter
+that converts `PipelineSpan` records to OTLP spans and sends them to an
+Arize Phoenix (or any OTLP-compatible) collector.
+
+**No-op by default.** When `OTEL_EXPORTER_OTLP_ENDPOINT` is unset or empty,
+`export_spans()` returns immediately without importing `opentelemetry`.
+
+**With an endpoint set**, it uses `opentelemetry-sdk` +
+`opentelemetry-exporter-otlp-proto-grpc`. These are *not* declared as package
+dependencies (keep the base install lightweight). Install them separately:
+
+```bash
+pip install opentelemetry-sdk opentelemetry-exporter-otlp-proto-grpc
+```
+
+**Usage:**
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+export OTEL_SERVICE_NAME=voice-eval-lab   # optional, default: voice-eval-lab
+uv run voice-eval run --out evals/REPORT.md --json evals/scores.json
+```
+
+Or from Python:
+
+```python
+from voice_eval_lab.observability.phoenix import export_spans
+# spans is a list[PipelineSpan] from a ConversationRun
+export_spans(spans, conv_id="my-conversation-id")
+```
+
+If `opentelemetry-sdk` is not installed and the endpoint IS set, a
+`logger.warning` is emitted and the function returns without raising — the
+eval run itself is never blocked by a tracing failure.
+
 ## Tests
 
 ```bash
-make test       # 239 unit tests
+make test       # 477 unit tests
 make check      # ruff + mypy --strict
 ```
 
@@ -294,13 +683,228 @@ src/voice_eval_lab/
   eval/
     metrics.py     Headline + diagnostic metric functions, markdown +
                    HTML renderers
-    golden.py      7-conversation bundled golden set
+    golden.py      25-conversation bundled golden set
   cli.py           `voice-eval` Typer entrypoint
 
-tests/             239 unit tests
+tests/             477 unit tests
 evals/             REPORT.md + scores.json + INTERPRETATION.md
 docs/              ARCHITECTURE.md + ADRs
 ```
+
+## Notes RAG
+
+The eval harness includes a session-note retrieval module (`src/voice_eval_lab/notes/`) that lets the agent look up relevant context mid-call via vector similarity.
+
+### Protocol shape
+
+```python
+class NotesStore(Protocol):
+    async def add_note(self, note_id: str, text: str,
+                       embedding: list[float] | None = None) -> None: ...
+    async def lookup(self, query: str, top_k: int = 3) -> list[NoteHit]: ...
+    async def clear(self) -> None: ...
+
+@dataclass(frozen=True)
+class NoteHit:
+    note_id: str
+    text: str
+    score: float   # cosine similarity in [-1, 1]
+```
+
+### Two backends
+
+| Backend | When active | Deps |
+|---|---|---|
+| `InMemoryNotesStore` | Default (no `NOTES_DSN` env var) | `numpy` (already a base dep) |
+| `PgVectorNotesStore` | `NOTES_DSN` env var set | `asyncpg` + `pgvector` (optional, `[real]` extras) |
+
+Use `make_notes_store()` to get the right backend automatically.
+
+### In-memory backend (out of the box)
+
+```bash
+# Add notes manually
+voice-eval notes add --id user-bg-001 --text "User is a senior Postgres engineer"
+
+# Look up notes from a fixture file
+voice-eval notes lookup --query "postgres" \
+    --fixture evals/notes_fixtures.json
+
+# Clear the store
+voice-eval notes clear
+```
+
+### Inject notes into an eval run
+
+```bash
+voice-eval run --with-notes evals/notes_fixtures.json
+```
+
+This wraps the LLM with `WithNotesLLM`, which prepends the top-3 most relevant notes as a `[Context notes] ...` line before each reply.
+
+### pgvector backend (opt-in)
+
+Bring up Postgres + pgvector locally:
+
+```bash
+make notes-up        # starts the container (docker compose)
+export NOTES_DSN="postgresql://vel:vel@localhost:5433/vel"
+voice-eval notes lookup --query "hnsw"  # now uses PgVectorNotesStore
+make notes-down      # stop the container
+```
+
+The container image is `pgvector/pgvector:pg16`; the DDL is auto-applied on first use. Install the optional drivers with:
+
+```bash
+pip install 'voice-eval-lab[real]'   # adds asyncpg + pgvector
+```
+
+### Env-var contract
+
+| Variable | Effect |
+|---|---|
+| `NOTES_DSN` | Set to a Postgres DSN to activate `PgVectorNotesStore` |
+| _(unset)_ | `InMemoryNotesStore` is used — no external services needed |
+
+---
+
+## Backend (FastAPI)
+
+A token-vending FastAPI backend lives in `src/voice_eval_lab/backend/`.
+Start it with:
+
+```bash
+voice-eval serve                        # in-memory store, no auth, port 8000
+voice-eval serve --port 9000 --reload   # dev mode with auto-reload
+```
+
+### Env vars
+
+| Variable | Effect |
+|---|---|
+| `BACKEND_AUTH_TOKEN` | When set, every request must supply `Authorization: Bearer <token>`. Unset = auth disabled (dev mode, logged as a warning). |
+| `BACKEND_DSN` | Postgres DSN. When set, sessions are persisted in Postgres. Unset = in-memory store. |
+| `LIVEKIT_API_KEY` | LiveKit API key. Required together with `LIVEKIT_API_SECRET` to mint real JWT tokens. |
+| `LIVEKIT_API_SECRET` | LiveKit API secret (≥32 bytes for HS256). |
+
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/sessions` | Create a session. Returns `session_id`, `livekit_token` (or `null`), `expires_at`. |
+| `GET` | `/sessions/{id}` | Retrieve session state. |
+| `POST` | `/sessions/{id}/end` | Mark session ended. |
+| `GET` | `/healthz` | Liveness probe — always `200 {"status":"ok"}`. |
+| `GET` | `/readyz` | Readiness probe — `503` if Postgres is unreachable. |
+
+### Worked curl example
+
+```bash
+# Start the server
+BACKEND_AUTH_TOKEN=dev123 voice-eval serve &
+
+# Create a session
+curl -s -X POST http://localhost:8000/sessions \
+  -H "Authorization: Bearer dev123" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": "alice", "scenario_id": "greeting"}' | jq .
+# {"session_id":"<uuid>","livekit_token":null,"expires_at":"2026-..."}
+
+# Retrieve it
+SESSION_ID=$(curl -s -X POST http://localhost:8000/sessions \
+  -H "Authorization: Bearer dev123" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": "bob"}' | jq -r .session_id)
+
+curl -s http://localhost:8000/sessions/$SESSION_ID \
+  -H "Authorization: Bearer dev123" | jq .
+
+# End it
+curl -s -X POST http://localhost:8000/sessions/$SESSION_ID/end \
+  -H "Authorization: Bearer dev123" | jq .
+```
+
+### Postgres persistence
+
+```bash
+# Start Postgres (pgvector image, port 5433)
+make backend-up
+
+# Connect the backend
+BACKEND_DSN="postgresql://voice_eval:voice_eval@localhost:5433/voice_eval" \
+BACKEND_AUTH_TOKEN=dev123 voice-eval serve
+
+# Tear down
+make backend-down
+```
+
+---
+
+## Deploy
+
+The backend (FastAPI + browser frontend) ships as a Docker image deployable to [Fly.io](https://fly.io).
+
+### Quickstart
+
+```bash
+# 1. Install the Fly CLI
+# https://fly.io/docs/hands-on/install-flyctl/
+
+# 2. Log in
+fly auth login
+
+# 3. Create the app (once)
+fly apps create my-voice-eval-lab
+
+# 4. Edit fly.toml — replace the sentinel with your app name
+#    app = "my-voice-eval-lab"
+
+# 5. Deploy (pushes secrets from .env, then deploys)
+make deploy
+# or: scripts/deploy.sh --app my-voice-eval-lab
+```
+
+### Required secrets
+
+| Secret | Description |
+|--------|-------------|
+| `BACKEND_AUTH_TOKEN` | Bearer token for backend API auth |
+| `BACKEND_DSN` | Postgres DSN for session persistence |
+| `LIVEKIT_API_KEY` | LiveKit API key |
+| `LIVEKIT_API_SECRET` | LiveKit API secret (≥32 bytes) |
+| `ANTHROPIC_API_KEY` | Anthropic API key (LLM judge) |
+| `GROQ_API_KEY` | Groq API key (real LLM adapter) |
+| `DEEPGRAM_API_KEY` | Deepgram API key (real STT adapter) |
+| `WHISPER_MODEL_NAME` | Whisper model name — activates local WhisperSTT (tiny/base/small/medium/large); no key required |
+| `CARTESIA_API_KEY` | Cartesia API key (real TTS adapter) |
+| `ELEVENLABS_API_KEY` | ElevenLabs API key (real TTS adapter; falls back to mock when absent) |
+| `ELEVENLABS_VOICE_ID` | ElevenLabs voice ID (default: `21m00Tcm4TlvDq8ikWAM` Rachel) |
+| `LANGFUSE_PUBLIC_KEY` | Langfuse public key (optional tracing) |
+| `LANGFUSE_SECRET_KEY` | Langfuse secret key (optional tracing) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Phoenix / OTLP collector endpoint (optional) |
+
+Place them in a `.env` file at the repo root; `scripts/deploy.sh` sources it automatically.
+
+### Local Docker smoke test
+
+```bash
+make docker-build        # builds voice-eval-lab:latest
+make docker-run          # runs on http://localhost:8000
+curl http://localhost:8000/healthz
+# {"status":"ok"}
+```
+
+### Cost estimate (Fly.io, May 2026)
+
+| Resource | Config | Est. $/month |
+|----------|--------|-------------|
+| VM | shared-cpu-1x, 1 GB RAM | ~$5–7 |
+| Postgres | 1 GB plan (if used) | ~$0 free tier |
+| **Total** | | **~$5–7** |
+
+Machines auto-stop when idle (`auto_stop_machines = "stop"`) so idle cost is near-zero.
+
+---
 
 ## Honest limitations
 
@@ -310,15 +914,104 @@ docs/              ARCHITECTURE.md + ADRs
   bundled `FlakyTTS` is a starter.
 - The faithfulness metric is substring-match. An LLM-as-judge with
   documented Cohen's-kappa calibration is the production path.
-- The bundled golden set is 7 hand-written conversations. Real
-  evaluation uses 30-50 with audio recordings; that requires a
-  separate corpus repo.
+- The bundled golden set is 25 hand-written conversations (halfway to
+  the 50-conversation brief target). Real evaluation uses 50+ with
+  audio recordings; see `evals/INTERPRETATION.md#golden-set-roadmap`
+  for the path to 50.
 - No Phoenix trace exporter wired yet — the `PipelineSpan` model
   already maps to OpenTelemetry shape, so adding one is small.
 - This isn't the voice agent itself; it's the rig you'd score one
   with. Pair it with [Pipecat](https://github.com/pipecat-ai/pipecat)
   + [LiveKit Agents](https://github.com/livekit/agents) for the
   realtime side.
+
+## Audio fixtures
+
+The harness includes a WAV fixture infrastructure that lets you attach real or
+synthetic audio to evaluation turns. This bridges the gap between the
+text-only mock pipeline and a real STT adapter such as Deepgram.
+
+### Fixture layout
+
+```
+evals/audio/
+  {conv_id}/
+    turn-00.wav
+    turn-01.wav
+    ...
+```
+
+The key is `(conv_id, turn_index)` where `turn_index` is the zero-based
+index among **user** turns only (agent turns are skipped, matching the order
+that `VoicePipeline.run` iterates).
+
+### Silence-fixture mode (default for tests)
+
+A `SilenceFixtureGenerator` creates valid WAV files containing PCM silence
+using only the stdlib `wave` module — no `soundfile`, `librosa`, or other
+audio packages required.
+
+```bash
+# Generate a 500 ms silence fixture
+voice-eval audio populate-silence \
+  --conv-id postgres-replication \
+  --turn 0 \
+  --duration-ms 500 \
+  --root evals/audio/
+
+# List all fixtures
+voice-eval audio list --root evals/audio/
+```
+
+The repo ships 54 pre-generated silence fixtures covering all 25 golden
+conversations.
+
+### Importing a real WAV
+
+```bash
+voice-eval audio import recorded.wav \
+  --conv-id hnsw-tuning \
+  --turn 0 \
+  --root evals/audio/
+```
+
+The command validates the RIFF/WAVE header before writing. Non-WAV files
+are rejected with a clear error.
+
+### Running the eval harness with audio fixtures
+
+```bash
+# Default: text-only mock pipeline (no audio needed)
+voice-eval run --out evals/REPORT.md
+
+# With fixtures wired: audio_bytes attached to each Turn before STT
+voice-eval run --audio-fixtures evals/audio/ --out evals/REPORT.md
+```
+
+When `--audio-fixtures` is supplied, `FilesystemAudioStore` is loaded and
+passed to `VoicePipeline.run`. For each user turn, the store's `get_audio`
+is called; if bytes are found, they are attached to `Turn.audio_bytes`
+before the STT adapter is invoked. When `DEEPGRAM_API_KEY` is set and a
+real Deepgram adapter is wired in, it will receive the fixture audio instead
+of the mock transcript.
+
+The mock `MockSTT` does not read `audio_bytes` — it ignores the field and
+returns the gold transcript (with optional WER injection). The flag therefore
+has **no effect on scores** unless a real STT adapter is substituted.
+
+### `AudioFixtureStore` Protocol
+
+```python
+class AudioFixtureStore(Protocol):
+    def get_audio(self, conv_id: str, turn_index: int) -> bytes | None: ...
+    def add_audio(self, conv_id: str, turn_index: int, wav_bytes: bytes) -> None: ...
+    def list_keys(self) -> list[tuple[str, int]]: ...
+```
+
+`FilesystemAudioStore` is the production implementation; any object
+conforming to this structural Protocol works with `VoicePipeline.run`.
+
+---
 
 ## License
 

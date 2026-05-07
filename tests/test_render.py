@@ -276,8 +276,6 @@ class TestEndpointingAggregateDefault:
         # ``scores.json`` whose schema predates the
         # ``aggregate_endpointing_accuracy`` field. Pydantic must
         # surface the absence as ``None``, not as ``1.0``.
-        from voice_eval_lab.models import EvalReport
-
         legacy_payload = {
             "n_conversations": 0,
             "aggregate_turn_latency": {
@@ -300,8 +298,6 @@ class TestEndpointingAggregateDefault:
         # All sibling nullable corpus-pooled aggregates on EvalReport
         # default to None; endpointing must follow the same pattern so
         # downstream rendering treats absent data uniformly.
-        from voice_eval_lab.models import EvalReport
-
         fields = EvalReport.model_fields
         for name in (
             "aggregate_faithfulness",

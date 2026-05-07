@@ -1,0 +1,34 @@
+[
+  {
+    "note_id": "user-bg-001",
+    "text": "User mentioned they are a senior engineer at a Postgres-focused startup"
+  },
+  {
+    "note_id": "user-bg-002",
+    "text": "User said they have been using pgvector for production embeddings for two years"
+  },
+  {
+    "note_id": "user-pref-001",
+    "text": "User said avoid mentioning AWS; they are fully on GCP"
+  },
+  {
+    "note_id": "user-pref-002",
+    "text": "User prefers concise answers with code examples over long explanations"
+  },
+  {
+    "note_id": "user-pref-003",
+    "text": "User asked not to suggest switching to a different database; they are committed to Postgres"
+  },
+  {
+    "note_id": "session-ctx-001",
+    "text": "Current session is about tuning HNSW index parameters for pgvector"
+  },
+  {
+    "note_id": "session-ctx-002",
+    "text": "User is investigating slow ANN query performance at ef_search=40 with 10M vectors"
+  },
+  {
+    "note_id": "session-ctx-003",
+    "text": "User confirmed that vacuum is already running nightly; not the cause of index bloat"
+  }
+]

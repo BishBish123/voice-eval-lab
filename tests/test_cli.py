@@ -107,6 +107,26 @@ class TestSymlinkAncestorGuard:
         assert result.exit_code != 0
         assert "symlink" in result.output.lower()
 
+    def test_compare_rejects_symlinked_parent_before_running_harness(
+        self, tmp_path: Path
+    ) -> None:
+        # Establish a real baseline so --baseline is valid.
+        baseline = tmp_path / "baseline.json"
+        runner.invoke(app, ["baseline", "--save", str(baseline)])
+        # Pre-plant a symlink as the --out parent directory.
+        real_dir = tmp_path / "real"
+        real_dir.mkdir()
+        link_dir = tmp_path / "link"
+        link_dir.symlink_to(real_dir)
+        out = link_dir / "diff.md"
+        result = runner.invoke(
+            app, ["compare", "--baseline", str(baseline), "--out", str(out)]
+        )
+        # Must fail before the harness runs; no diff file should be written.
+        assert result.exit_code != 0
+        assert "symlink" in result.output.lower()
+        assert not out.exists()
+
 
 class TestListCommand:
     def test_list_outputs_each_conversation(self) -> None:

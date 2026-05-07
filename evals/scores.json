@@ -1,27 +1,27 @@
 {
-  "n_conversations": 7,
+  "n_conversations": 25,
   "aggregate_turn_latency": {
-    "p50_ms": 275.0,
-    "p95_ms": 275.0,
-    "p99_ms": 275.0,
-    "n": 15
+    "p50_ms": 278.5,
+    "p95_ms": 477.6999999999999,
+    "p99_ms": 628.75,
+    "n": 54
   },
   "aggregate_wer": 0.0,
-  "aggregate_faithfulness": 0.6153846153846154,
+  "aggregate_faithfulness": 0.68,
   "aggregate_barge_in_success": 1.0,
   "aggregate_false_trigger_rate": 0.0,
   "aggregate_barge_in_latency_p95_ms": 100.0,
-  "aggregate_tts_first_byte_jitter_ms": 0.0,
+  "aggregate_tts_first_byte_jitter_ms": 94.4388233621358,
   "aggregate_endpointing_accuracy": 1.0,
-  "aggregate_llm_decisiveness": 0.5714285714285714,
+  "aggregate_llm_decisiveness": 0.6226415094339622,
   "per_conversation": [
     {
       "conv_id": "postgres-replication",
       "topic": "Postgres replication basics",
       "turn_latency": {
-        "p50_ms": 275.0,
-        "p95_ms": 275.0,
-        "p99_ms": 275.0,
+        "p50_ms": 259.5,
+        "p95_ms": 279.75,
+        "p99_ms": 281.55,
         "n": 2
       },
       "transcription_wer": 0.0,
@@ -29,7 +29,7 @@
       "barge_in_success_rate": 1.0,
       "false_trigger_rate": 0.0,
       "barge_in_latency_p95_ms": 0.0,
-      "tts_first_byte_jitter_ms": 0.0,
+      "tts_first_byte_jitter_ms": 22.5,
       "endpointing_accuracy": 1.0,
       "llm_decisiveness": 1.0
     },
@@ -37,9 +37,9 @@
       "conv_id": "hnsw-tuning",
       "topic": "HNSW index tuning",
       "turn_latency": {
-        "p50_ms": 275.0,
-        "p95_ms": 275.0,
-        "p99_ms": 275.0,
+        "p50_ms": 258.0,
+        "p95_ms": 280.5,
+        "p99_ms": 282.5,
         "n": 2
       },
       "transcription_wer": 0.0,
@@ -47,7 +47,7 @@
       "barge_in_success_rate": 1.0,
       "false_trigger_rate": 0.0,
       "barge_in_latency_p95_ms": 100.0,
-      "tts_first_byte_jitter_ms": 0.0,
+      "tts_first_byte_jitter_ms": 25.0,
       "endpointing_accuracy": 1.0,
       "llm_decisiveness": 0.5
     },
@@ -55,9 +55,9 @@
       "conv_id": "prom-burn-rate",
       "topic": "Prometheus SLO burn rate",
       "turn_latency": {
-        "p50_ms": 275.0,
-        "p95_ms": 275.0,
-        "p99_ms": 275.0,
+        "p50_ms": 470.0,
+        "p95_ms": 470.0,
+        "p99_ms": 470.0,
         "n": 1
       },
       "transcription_wer": 0.0,
@@ -73,9 +73,9 @@
       "conv_id": "empty-noise",
       "topic": "False-trigger handling",
       "turn_latency": {
-        "p50_ms": 275.0,
-        "p95_ms": 275.0,
-        "p99_ms": 275.0,
+        "p50_ms": 279.0,
+        "p95_ms": 279.0,
+        "p99_ms": 279.0,
         "n": 1
       },
       "transcription_wer": 0.0,
@@ -91,9 +91,9 @@
       "conv_id": "agent-led-debug",
       "topic": "Agent-led debugging session",
       "turn_latency": {
-        "p50_ms": 275.0,
-        "p95_ms": 275.0,
-        "p99_ms": 275.0,
+        "p50_ms": 315.0,
+        "p95_ms": 326.7,
+        "p99_ms": 327.74,
         "n": 3
       },
       "transcription_wer": 0.0,
@@ -101,7 +101,7 @@
       "barge_in_success_rate": 1.0,
       "false_trigger_rate": 0.0,
       "barge_in_latency_p95_ms": 0.0,
-      "tts_first_byte_jitter_ms": 0.0,
+      "tts_first_byte_jitter_ms": 19.8158185969358,
       "endpointing_accuracy": 1.0,
       "llm_decisiveness": 0.6666666666666666
     },
@@ -109,9 +109,9 @@
       "conv_id": "noisy-vad",
       "topic": "Noisy VAD endpointing",
       "turn_latency": {
-        "p50_ms": 275.0,
-        "p95_ms": 275.0,
-        "p99_ms": 275.0,
+        "p50_ms": 252.0,
+        "p95_ms": 259.2,
+        "p99_ms": 259.84,
         "n": 3
       },
       "transcription_wer": 0.0,
@@ -119,7 +119,7 @@
       "barge_in_success_rate": 1.0,
       "false_trigger_rate": 0.0,
       "barge_in_latency_p95_ms": 0.0,
-      "tts_first_byte_jitter_ms": 0.0,
+      "tts_first_byte_jitter_ms": 14.514360704718161,
       "endpointing_accuracy": 1.0,
       "llm_decisiveness": 0.5
     },
@@ -127,9 +127,9 @@
       "conv_id": "double-barge",
       "topic": "Two consecutive barge-ins",
       "turn_latency": {
-        "p50_ms": 275.0,
-        "p95_ms": 275.0,
-        "p99_ms": 275.0,
+        "p50_ms": 277.0,
+        "p95_ms": 315.7,
+        "p99_ms": 319.14,
         "n": 3
       },
       "transcription_wer": 0.0,
@@ -137,9 +137,333 @@
       "barge_in_success_rate": 1.0,
       "false_trigger_rate": 0.0,
       "barge_in_latency_p95_ms": 100.0,
-      "tts_first_byte_jitter_ms": 0.0,
+      "tts_first_byte_jitter_ms": 30.728199137310703,
       "endpointing_accuracy": 1.0,
       "llm_decisiveness": 0.3333333333333333
+    },
+    {
+      "conv_id": "tcp-handshake",
+      "topic": "TCP three-way handshake",
+      "turn_latency": {
+        "p50_ms": 223.0,
+        "p95_ms": 248.2,
+        "p99_ms": 250.44,
+        "n": 2
+      },
+      "transcription_wer": 0.0,
+      "response_faithfulness": 1.0,
+      "barge_in_success_rate": 1.0,
+      "false_trigger_rate": 0.0,
+      "barge_in_latency_p95_ms": 0.0,
+      "tts_first_byte_jitter_ms": 28.0,
+      "endpointing_accuracy": 1.0,
+      "llm_decisiveness": 1.0
+    },
+    {
+      "conv_id": "s3-consistency",
+      "topic": "S3 strong read-after-write consistency",
+      "turn_latency": {
+        "p50_ms": 259.0,
+        "p95_ms": 300.4,
+        "p99_ms": 304.08,
+        "n": 2
+      },
+      "transcription_wer": 0.0,
+      "response_faithfulness": 1.0,
+      "barge_in_success_rate": 1.0,
+      "false_trigger_rate": 0.0,
+      "barge_in_latency_p95_ms": 0.0,
+      "tts_first_byte_jitter_ms": 46.0,
+      "endpointing_accuracy": 1.0,
+      "llm_decisiveness": 0.5
+    },
+    {
+      "conv_id": "react-reconciler",
+      "topic": "React reconciler and fiber diffing",
+      "turn_latency": {
+        "p50_ms": 359.5,
+        "p95_ms": 424.75,
+        "p99_ms": 430.55,
+        "n": 2
+      },
+      "transcription_wer": 0.0,
+      "response_faithfulness": 1.0,
+      "barge_in_success_rate": 1.0,
+      "false_trigger_rate": 0.0,
+      "barge_in_latency_p95_ms": 0.0,
+      "tts_first_byte_jitter_ms": 72.5,
+      "endpointing_accuracy": 1.0,
+      "llm_decisiveness": 1.0
+    },
+    {
+      "conv_id": "redis-eviction",
+      "topic": "Redis maxmemory eviction policies",
+      "turn_latency": {
+        "p50_ms": 463.5,
+        "p95_ms": 489.15,
+        "p99_ms": 491.43,
+        "n": 2
+      },
+      "transcription_wer": 0.0,
+      "response_faithfulness": 0.5,
+      "barge_in_success_rate": 1.0,
+      "false_trigger_rate": 0.0,
+      "barge_in_latency_p95_ms": 0.0,
+      "tts_first_byte_jitter_ms": 28.5,
+      "endpointing_accuracy": 1.0,
+      "llm_decisiveness": 0.5
+    },
+    {
+      "conv_id": "mid-sentence-barge",
+      "topic": "Mid-sentence barge-in during explanation",
+      "turn_latency": {
+        "p50_ms": 271.0,
+        "p95_ms": 582.4,
+        "p99_ms": 610.08,
+        "n": 3
+      },
+      "transcription_wer": 0.0,
+      "response_faithfulness": 1.0,
+      "barge_in_success_rate": 1.0,
+      "false_trigger_rate": 0.0,
+      "barge_in_latency_p95_ms": 100.0,
+      "tts_first_byte_jitter_ms": 170.0901721636693,
+      "endpointing_accuracy": 1.0,
+      "llm_decisiveness": 1.0
+    },
+    {
+      "conv_id": "early-barge-cloud",
+      "topic": "Early barge-in before agent finishes intro",
+      "turn_latency": {
+        "p50_ms": 296.0,
+        "p95_ms": 342.8,
+        "p99_ms": 346.96,
+        "n": 2
+      },
+      "transcription_wer": 0.0,
+      "response_faithfulness": 1.0,
+      "barge_in_success_rate": 1.0,
+      "false_trigger_rate": 0.0,
+      "barge_in_latency_p95_ms": 100.0,
+      "tts_first_byte_jitter_ms": 52.0,
+      "endpointing_accuracy": 1.0,
+      "llm_decisiveness": 1.0
+    },
+    {
+      "conv_id": "triple-barge",
+      "topic": "Three consecutive barge-ins",
+      "turn_latency": {
+        "p50_ms": 248.5,
+        "p95_ms": 330.45,
+        "p99_ms": 339.69,
+        "n": 4
+      },
+      "transcription_wer": 0.0,
+      "response_faithfulness": 1.0,
+      "barge_in_success_rate": 1.0,
+      "false_trigger_rate": 0.0,
+      "barge_in_latency_p95_ms": 100.0,
+      "tts_first_byte_jitter_ms": 57.83813620786894,
+      "endpointing_accuracy": 1.0,
+      "llm_decisiveness": 1.0
+    },
+    {
+      "conv_id": "ambig-cache",
+      "topic": "Ambiguous cache reference",
+      "turn_latency": {
+        "p50_ms": 228.0,
+        "p95_ms": 233.4,
+        "p99_ms": 233.88,
+        "n": 2
+      },
+      "transcription_wer": 0.0,
+      "response_faithfulness": 1.0,
+      "barge_in_success_rate": 1.0,
+      "false_trigger_rate": 0.0,
+      "barge_in_latency_p95_ms": 0.0,
+      "tts_first_byte_jitter_ms": 6.0,
+      "endpointing_accuracy": 1.0,
+      "llm_decisiveness": 1.0
+    },
+    {
+      "conv_id": "ambig-deploy",
+      "topic": "Ambiguous deployment target",
+      "turn_latency": {
+        "p50_ms": 263.5,
+        "p95_ms": 306.25,
+        "p99_ms": 310.05,
+        "n": 2
+      },
+      "transcription_wer": 0.0,
+      "response_faithfulness": 0.5,
+      "barge_in_success_rate": 1.0,
+      "false_trigger_rate": 0.0,
+      "barge_in_latency_p95_ms": 0.0,
+      "tts_first_byte_jitter_ms": 47.5,
+      "endpointing_accuracy": 1.0,
+      "llm_decisiveness": 0.5
+    },
+    {
+      "conv_id": "ambig-index",
+      "topic": "Ambiguous slow index without table name",
+      "turn_latency": {
+        "p50_ms": 255.0,
+        "p95_ms": 255.9,
+        "p99_ms": 255.98,
+        "n": 2
+      },
+      "transcription_wer": 0.0,
+      "response_faithfulness": 0.5,
+      "barge_in_success_rate": 1.0,
+      "false_trigger_rate": 0.0,
+      "barge_in_latency_p95_ms": 0.0,
+      "tts_first_byte_jitter_ms": 1.0,
+      "endpointing_accuracy": 1.0,
+      "llm_decisiveness": 0.5
+    },
+    {
+      "conv_id": "oos-weather",
+      "topic": "Out-of-scope weather query mid-call",
+      "turn_latency": {
+        "p50_ms": 244.0,
+        "p95_ms": 244.0,
+        "p99_ms": 244.0,
+        "n": 1
+      },
+      "transcription_wer": 0.0,
+      "response_faithfulness": 1.0,
+      "barge_in_success_rate": 1.0,
+      "false_trigger_rate": 0.0,
+      "barge_in_latency_p95_ms": 0.0,
+      "tts_first_byte_jitter_ms": 0.0,
+      "endpointing_accuracy": 1.0,
+      "llm_decisiveness": 0.0
+    },
+    {
+      "conv_id": "oos-stock-price",
+      "topic": "Out-of-scope stock price query",
+      "turn_latency": {
+        "p50_ms": 273.0,
+        "p95_ms": 273.0,
+        "p99_ms": 273.0,
+        "n": 1
+      },
+      "transcription_wer": 0.0,
+      "response_faithfulness": 1.0,
+      "barge_in_success_rate": 1.0,
+      "false_trigger_rate": 0.0,
+      "barge_in_latency_p95_ms": 0.0,
+      "tts_first_byte_jitter_ms": 0.0,
+      "endpointing_accuracy": 1.0,
+      "llm_decisiveness": 0.0
+    },
+    {
+      "conv_id": "k8s-networking-deep",
+      "topic": "Kubernetes pod networking deep-dive",
+      "turn_latency": {
+        "p50_ms": 190.0,
+        "p95_ms": 190.0,
+        "p99_ms": 190.0,
+        "n": 1
+      },
+      "transcription_wer": 0.0,
+      "response_faithfulness": 1.0,
+      "barge_in_success_rate": 1.0,
+      "false_trigger_rate": 0.0,
+      "barge_in_latency_p95_ms": 0.0,
+      "tts_first_byte_jitter_ms": 0.0,
+      "endpointing_accuracy": 1.0,
+      "llm_decisiveness": 1.0
+    },
+    {
+      "conv_id": "ssl-tls-handshake",
+      "topic": "TLS 1.3 handshake walkthrough",
+      "turn_latency": {
+        "p50_ms": 345.0,
+        "p95_ms": 345.0,
+        "p99_ms": 345.0,
+        "n": 1
+      },
+      "transcription_wer": 0.0,
+      "response_faithfulness": 1.0,
+      "barge_in_success_rate": 1.0,
+      "false_trigger_rate": 0.0,
+      "barge_in_latency_p95_ms": 0.0,
+      "tts_first_byte_jitter_ms": 0.0,
+      "endpointing_accuracy": 1.0,
+      "llm_decisiveness": 1.0
+    },
+    {
+      "conv_id": "rapid-fire-git",
+      "topic": "Rapid-fire git command Q&A",
+      "turn_latency": {
+        "p50_ms": 315.5,
+        "p95_ms": 392.5,
+        "p99_ms": 400.9,
+        "n": 4
+      },
+      "transcription_wer": 0.0,
+      "response_faithfulness": 0.0,
+      "barge_in_success_rate": 1.0,
+      "false_trigger_rate": 0.0,
+      "barge_in_latency_p95_ms": 0.0,
+      "tts_first_byte_jitter_ms": 52.964020806581516,
+      "endpointing_accuracy": 1.0,
+      "llm_decisiveness": 0.0
+    },
+    {
+      "conv_id": "rapid-fire-regex",
+      "topic": "Rapid-fire regex clarifications",
+      "turn_latency": {
+        "p50_ms": 316.5,
+        "p95_ms": 444.34999999999997,
+        "p99_ms": 457.66999999999996,
+        "n": 4
+      },
+      "transcription_wer": 0.0,
+      "response_faithfulness": 0.5,
+      "barge_in_success_rate": 1.0,
+      "false_trigger_rate": 0.0,
+      "barge_in_latency_p95_ms": 0.0,
+      "tts_first_byte_jitter_ms": 73.82072879618569,
+      "endpointing_accuracy": 1.0,
+      "llm_decisiveness": 0.5
+    },
+    {
+      "conv_id": "clarify-oom",
+      "topic": "Agent asks for OOM context before answering",
+      "turn_latency": {
+        "p50_ms": 440.0,
+        "p95_ms": 621.8,
+        "p99_ms": 637.96,
+        "n": 2
+      },
+      "transcription_wer": 0.0,
+      "response_faithfulness": 0.5,
+      "barge_in_success_rate": 1.0,
+      "false_trigger_rate": 0.0,
+      "barge_in_latency_p95_ms": 0.0,
+      "tts_first_byte_jitter_ms": 202.0,
+      "endpointing_accuracy": 1.0,
+      "llm_decisiveness": 0.5
+    },
+    {
+      "conv_id": "clarify-latency",
+      "topic": "Agent asks which layer is slow before diagnosing",
+      "turn_latency": {
+        "p50_ms": 311.5,
+        "p95_ms": 327.25,
+        "p99_ms": 328.65,
+        "n": 2
+      },
+      "transcription_wer": 0.0,
+      "response_faithfulness": 0.5,
+      "barge_in_success_rate": 1.0,
+      "false_trigger_rate": 0.0,
+      "barge_in_latency_p95_ms": 0.0,
+      "tts_first_byte_jitter_ms": 17.5,
+      "endpointing_accuracy": 1.0,
+      "llm_decisiveness": 0.5
     }
   ]
 }

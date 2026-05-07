@@ -116,12 +116,11 @@ excluded from the denominator. Empty replies count as hedging.
 
 - **>80%** in production. Hedging on questions the agent should
   answer is a calibration bug, not graceful uncertainty.
-- The bundled mock LLM hits **57%** because the `agent-led-debug`
-  conversation contains a turn ("idk") that forces the fallback,
-  and several other conversations (`hnsw-tuning`, `empty-noise`,
-  `noisy-vad`, `double-barge`) have at least one turn the mock
-  can't ground, falling back to the `I don't have a confident
-  answer about ...` reply.
+- The bundled mock LLM hits **62%** on the 25-conversation golden set
+  because several conversations contain turns the mock LLM cannot
+  ground (out-of-scope turns, ambiguous redirects, rapid back-and-forth
+  acknowledgments like "great thanks" and "ok got it"), which fall back
+  to the `I don't have a confident answer about ...` reply.
 
 ## What to do when a metric regresses
 
@@ -135,3 +134,21 @@ excluded from the denominator. Empty replies count as hedging.
 4. For WER / faithfulness / decisiveness regressions: add the failing
    conversation to a focused test, then iterate against the metric
    with the rest of the suite as a guardrail.
+
+## Golden-set roadmap
+
+The brief targets 50 hand-curated conversations. The current set has
+**25** (as of the v0.3 expansion). The 7-conversation v0.1/v0.2 set
+covered the metric paths; the 25-conversation set adds breadth across
+seven failure-mode categories (happy-path Q&A, barge-in, ambiguous
+input, out-of-scope, long answer, fast back-and-forth, clarifying
+question).
+
+The path to 50 is curating 25 more conversations. Suggested priorities:
+- 5 more out-of-scope refusals (different topic areas)
+- 5 more barge-in scenarios (aggressive early barge-in, barge-in on
+  long answers, barge-in during TTS jitter)
+- 5 more ambiguous inputs (under-specified programming language,
+  version ambiguity, conflicting constraints)
+- 5 more fast back-and-forth (debugging session pings, config Q&A)
+- 5 more happy-path deep technical Q&A (security, ML, systems)

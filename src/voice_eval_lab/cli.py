@@ -7,6 +7,10 @@ Subcommands:
 - `baseline`  — run the eval and persist the headline scores as a baseline file
 - `compare`   — diff a fresh run against a baseline, exit non-zero on regression
 - `render`    — re-render an existing scores.json into markdown or HTML
+- `calibrate` — run the LLM judge over a CSV of human-labelled samples and compute Cohen's kappa
+- `notes`     — manage the in-memory notes store (add / lookup / clear)
+- `serve`     — start the FastAPI backend with uvicorn
+- `pipeline`  — Pipecat pipeline commands: run (in-memory) and serve (LiveKit)
 """
 
 from __future__ import annotations
@@ -37,11 +41,18 @@ from voice_eval_lab.eval.golden import default_golden_set
 from voice_eval_lab.eval.metrics import (
     EvalReport,
     IncompleteRunError,
+    _real_turn_runs,
     render_report,
     render_report_html,
     score_run,
 )
-from voice_eval_lab.pipeline import MockLLM, MockSTT, MockTTS, VoicePipeline
+from voice_eval_lab.judge.factory import make_judge
+from voice_eval_lab.judge.llm import LLMJudge
+from voice_eval_lab.judge.protocol import JudgeProtocol
+from voice_eval_lab.models import Conversation, ConversationRun, TurnRole
+from voice_eval_lab.notes.memory import InMemoryNotesStore
+from voice_eval_lab.notes.protocol import NotesStore
+from voice_eval_lab.pipeline import STT, TTS, MockLLM, MockSTT, MockTTS, VoicePipeline
 
 app = typer.Typer(
     name="voice-eval",
@@ -49,6 +60,31 @@ app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
 )
+
+notes_app = typer.Typer(
+    name="notes",
+    help="Manage the session notes store (add / lookup / clear).",
+    add_completion=False,
+    no_args_is_help=True,
+)
+app.add_typer(notes_app, name="notes")
+
+pipeline_app = typer.Typer(
+    name="pipeline",
+    help="Pipecat pipeline commands: run (in-memory smoke test) and serve (LiveKit).",
+    add_completion=False,
+    no_args_is_help=True,
+)
+app.add_typer(pipeline_app, name="pipeline")
+
+audio_app = typer.Typer(
+    name="audio",
+    help="Audio fixture management: populate silence, import WAV files, list keys.",
+    add_completion=False,
+    no_args_is_help=True,
+)
+app.add_typer(audio_app, name="audio")
+
 console = Console()
 
 
@@ -199,33 +235,268 @@ def _safe_write_text(path: Path, body: str) -> None:
         raise typer.Exit(code=2) from None
 
 
+_VALID_JUDGE_MODES = frozenset({"auto", "llm", "substring"})
+_VALID_STT_MODES = frozenset({"auto", "mock", "deepgram", "whisper"})
+_VALID_TTS_MODES = frozenset({"auto", "mock", "cartesia", "elevenlabs"})
+_VALID_TURN_DETECTOR_MODES = frozenset({"smart", "none"})
+
+
+def _validate_judge_flag(mode: str) -> None:
+    """Raise ``typer.BadParameter`` if *mode* is not a recognised judge mode."""
+    if mode not in _VALID_JUDGE_MODES:
+        raise typer.BadParameter(
+            f"Unknown judge mode: {mode!r}. Valid values: {sorted(_VALID_JUDGE_MODES)}."
+        )
+
+
+def _validate_stt_flag(mode: str) -> None:
+    """Raise ``typer.BadParameter`` if *mode* is not a recognised STT mode."""
+    if mode not in _VALID_STT_MODES:
+        raise typer.BadParameter(
+            f"Unknown STT mode: {mode!r}. Valid values: {sorted(_VALID_STT_MODES)}."
+        )
+
+
+def _validate_tts_flag(mode: str) -> None:
+    """Raise ``typer.BadParameter`` if *mode* is not a recognised TTS mode."""
+    if mode not in _VALID_TTS_MODES:
+        raise typer.BadParameter(
+            f"Unknown TTS mode: {mode!r}. Valid values: {sorted(_VALID_TTS_MODES)}."
+        )
+
+
+def _validate_turn_detector_flag(mode: str) -> None:
+    """Raise ``typer.BadParameter`` if *mode* is not a recognised turn-detector mode."""
+    if mode not in _VALID_TURN_DETECTOR_MODES:
+        raise typer.BadParameter(
+            f"Unknown turn-detector mode: {mode!r}. "
+            f"Valid values: {sorted(_VALID_TURN_DETECTOR_MODES)}."
+        )
+
+
+def _make_stt_from_flag(mode: str) -> STT:
+    """Construct an STT adapter from the --stt CLI flag.
+
+    Modes
+    -----
+    ``auto``     — delegate to :func:`~voice_eval_lab.adapters.make_stt` (env-var dispatch).
+    ``mock``     — always :class:`~voice_eval_lab.pipeline.MockSTT`.
+    ``deepgram`` — always :class:`~voice_eval_lab.adapters.DeepgramSTT`
+                   (mock path when ``DEEPGRAM_API_KEY`` is absent).
+    ``whisper``  — always :class:`~voice_eval_lab.adapters.WhisperSTT`
+                   using ``WHISPER_MODEL_NAME`` env var (default: ``tiny``).
+    """
+    import os
+
+    from voice_eval_lab.adapters import DeepgramSTT, WhisperSTT
+    from voice_eval_lab.adapters import make_stt as _make_stt
+
+    if mode == "auto":
+        return _make_stt()
+    if mode == "mock":
+        return MockSTT()
+    if mode == "deepgram":
+        return DeepgramSTT()
+    if mode == "whisper":
+        model_name = os.environ.get("WHISPER_MODEL_NAME", "tiny")
+        return WhisperSTT(model_name=model_name)
+    # Unreachable after _validate_stt_flag, but be explicit.
+    raise typer.BadParameter(f"Unknown STT mode: {mode!r}")
+
+
+def _make_tts_from_flag(mode: str) -> TTS:
+    """Construct a TTS adapter from the --tts CLI flag.
+
+    Modes
+    -----
+    ``auto``       — delegate to :func:`~voice_eval_lab.adapters.make_tts` (env-var dispatch).
+    ``mock``       — always :class:`~voice_eval_lab.pipeline.MockTTS`.
+    ``cartesia``   — always :class:`~voice_eval_lab.adapters.CartesiaTTS`
+                     (mock path when ``CARTESIA_API_KEY`` is absent).
+    ``elevenlabs`` — always :class:`~voice_eval_lab.adapters.ElevenLabsTTS`
+                     (mock path when ``ELEVENLABS_API_KEY`` is absent).
+    """
+    from voice_eval_lab.adapters import CartesiaTTS, ElevenLabsTTS
+    from voice_eval_lab.adapters import make_tts as _make_tts
+
+    if mode == "auto":
+        return _make_tts()
+    if mode == "mock":
+        return MockTTS()
+    if mode == "cartesia":
+        return CartesiaTTS()
+    if mode == "elevenlabs":
+        return ElevenLabsTTS()
+    # Unreachable after _validate_tts_flag, but be explicit.
+    raise typer.BadParameter(f"Unknown TTS mode: {mode!r}")
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _load_notes_fixture(path: Path) -> InMemoryNotesStore:
+    """Load a notes fixture JSON into an :class:`InMemoryNotesStore`.
+
+    The JSON must be a list of objects with ``note_id`` and ``text`` keys.
+    An optional ``embedding`` list key is also accepted.
+
+    Runs synchronously (builds the store in a fresh event loop).
+    """
+    try:
+        raw = path.read_text()
+    except FileNotFoundError:
+        console.print(f"[red]notes fixture not found:[/] {path}")
+        raise typer.Exit(code=2) from None
+    except OSError as exc:
+        console.print(f"[red]could not read notes fixture {path}:[/] {exc}")
+        raise typer.Exit(code=2) from None
+    try:
+        records = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        console.print(f"[red]notes fixture is not valid JSON:[/] {path} ({exc})")
+        raise typer.Exit(code=2) from None
+    if not isinstance(records, list):
+        console.print(f"[red]notes fixture must be a JSON array:[/] {path}")
+        raise typer.Exit(code=2) from None
+
+    store = InMemoryNotesStore()
+
+    async def _load() -> None:
+        for item in records:
+            if not isinstance(item, dict) or "note_id" not in item or "text" not in item:
+                console.print("[red]each notes fixture entry must have note_id and text[/]")
+                raise typer.Exit(code=2)
+            await store.add_note(
+                note_id=item["note_id"],
+                text=item["text"],
+                embedding=item.get("embedding"),
+            )
+
+    asyncio.run(_load())
+    return store
 
 
 def _run_eval(
     *,
     wer_substitution_rate: float = 0.0,
     false_trigger_rate: float = 0.0,
+    judge: JudgeProtocol | None = None,
+    notes_fixture: Path | None = None,
+    audio_fixtures: Path | None = None,
+    stt: STT | None = None,
+    tts: TTS | None = None,
 ) -> EvalReport:
+    """Run the eval. Caller must supply the judge — judge construction may
+    raise OSError/ImportError for missing keys/deps, and that should be
+    handled with a tight catch at the call site, not folded into eval errors.
+
+    When ``stt`` is ``None``, defaults to ``MockSTT(wer_substitution_rate=...)``.
+    When ``tts`` is ``None``, defaults to ``MockTTS()``.
+    """
+
+    # Load the fixture synchronously before entering the event loop to avoid
+    # nested asyncio.run() (asyncio.run cannot be called from a running loop).
+    pre_loaded_store = _load_notes_fixture(notes_fixture) if notes_fixture is not None else None
+
+    # Build the audio fixture store if a directory was supplied.
+    audio_store = None
+    if audio_fixtures is not None:
+        from voice_eval_lab.audio import FilesystemAudioStore
+
+        audio_store = FilesystemAudioStore(audio_fixtures)
+
     async def _go() -> EvalReport:
+        base_llm: object = MockLLM()
+        if pre_loaded_store is not None:
+            from voice_eval_lab.notes.llm_adapter import WithNotesLLM
+
+            llm: object = WithNotesLLM(inner=base_llm, store=pre_loaded_store)
+        else:
+            llm = base_llm
+
+        # When an explicit STT adapter is provided use it; otherwise default
+        # to MockSTT so that wer_substitution_rate is still honoured.
+        effective_stt: STT = stt if stt is not None else MockSTT(wer_substitution_rate=wer_substitution_rate)
+        # When an explicit TTS adapter is provided use it; otherwise default to MockTTS.
+        effective_tts: TTS = tts if tts is not None else MockTTS()
+
         pipeline = VoicePipeline(
-            stt=MockSTT(wer_substitution_rate=wer_substitution_rate),
-            llm=MockLLM(),
-            tts=MockTTS(),
+            stt=effective_stt,
+            llm=llm,  # type: ignore[arg-type]
+            tts=effective_tts,
             false_trigger_rate=false_trigger_rate,
         )
         conversations = default_golden_set()
-        runs = [await pipeline.run(c) for c in conversations]
+        runs = [await pipeline.run(c, audio_store=audio_store) for c in conversations]
         # Thread the pipeline's actual configured budget through to the
         # scorer so the metric and the pipeline contract cannot drift.
-        return score_run(
+        report = score_run(
             list(zip(conversations, runs, strict=True)),
             barge_in_budget_ms=pipeline.barge_in_yield_ms,
         )
 
+        # Substring judge produces the same numbers already in `report`,
+        # so only re-score when a real LLM judge was selected.
+        if judge is not None and isinstance(judge, LLMJudge):
+            report = await _apply_llm_faithfulness(judge, conversations, runs, report)
+
+        return report
+
     return asyncio.run(_go())
+
+
+async def _apply_llm_faithfulness(
+    judge: object,
+    conversations: list[Conversation],
+    runs: list[ConversationRun],
+    report: EvalReport,
+) -> EvalReport:
+    """Re-score faithfulness using the LLM judge and patch the EvalReport.
+
+    The per-conversation and aggregate faithfulness values are replaced in
+    a new EvalReport so no other metric is touched.
+    """
+    assert isinstance(judge, JudgeProtocol)
+
+    grounded_total = 0
+    ground_count = 0
+    new_per_conv = list(report.per_conversation)
+
+    for idx, (conv, run) in enumerate(zip(conversations, runs, strict=True)):
+        if not conv.gold_facts:
+            continue  # vacuously faithful — unchanged
+        user_turns = [t for t in conv.turns if t.role is TurnRole.USER]
+        real_turns = _real_turn_runs(run)
+        grounded = 0
+        counted = 0
+        for i, tr in enumerate(real_turns):
+            if i < len(user_turns) and not user_turns[i].text.strip():
+                continue
+            counted += 1
+            question = user_turns[i].text if i < len(user_turns) else ""
+            result = await judge.score(
+                question=question,
+                expected_keypoints=conv.gold_facts,
+                answer=tr.agent_reply,
+            )
+            if result.score >= 0.5:
+                grounded += 1
+        conv_faith = grounded / counted if counted else 0.0
+        grounded_total += grounded
+        ground_count += counted
+        # Patch per-conversation faithfulness.
+        old = new_per_conv[idx]
+        new_per_conv[idx] = old.model_copy(update={"response_faithfulness": conv_faith})
+
+    agg_faith = grounded_total / ground_count if ground_count > 0 else report.aggregate_faithfulness
+    return report.model_copy(
+        update={
+            "aggregate_faithfulness": agg_faith,
+            "per_conversation": new_per_conv,
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -251,12 +522,81 @@ def run(
         ),
         callback=_validate_unit_interval,
     ),
+    judge: str = typer.Option(
+        "auto",
+        help=(
+            "Faithfulness judge backend: 'auto' (default) uses LLMJudge when "
+            "ANTHROPIC_API_KEY or OPENAI_API_KEY is set, else SubstringProxyJudge. "
+            "'llm' forces LLMJudge (raises if no key is set). "
+            "'substring' forces SubstringProxyJudge regardless of env keys."
+        ),
+    ),
+    with_notes: Path | None = typer.Option(
+        None,
+        "--with-notes",
+        help=(
+            "Path to a notes fixture JSON (array of {note_id, text} objects). "
+            "Loads the notes into an InMemoryNotesStore and wraps the LLM with "
+            "WithNotesLLM so relevant notes are prepended to each reply."
+        ),
+    ),
+    audio_fixtures: Path | None = typer.Option(
+        None,
+        "--audio-fixtures",
+        help=(
+            "Path to an audio fixture directory (e.g. evals/audio/). "
+            "Loads a FilesystemAudioStore and attaches WAV bytes to each Turn "
+            "before the STT adapter is called. When DEEPGRAM_API_KEY is set "
+            "the real Deepgram adapter will receive actual audio."
+        ),
+    ),
+    stt: str = typer.Option(
+        "auto",
+        "--stt",
+        help=(
+            "STT adapter to use: 'auto' (default) dispatches based on env vars "
+            "(DEEPGRAM_API_KEY → deepgram; WHISPER_MODEL_NAME → whisper; else mock). "
+            "'mock' forces MockSTT regardless of env vars. "
+            "'deepgram' forces DeepgramSTT (mock path when DEEPGRAM_API_KEY is absent). "
+            "'whisper' forces WhisperSTT using WHISPER_MODEL_NAME (default model: tiny)."
+        ),
+    ),
+    tts: str = typer.Option(
+        "auto",
+        "--tts",
+        help=(
+            "TTS adapter to use: 'auto' (default) dispatches based on env vars "
+            "(CARTESIA_API_KEY → cartesia; ELEVENLABS_API_KEY → elevenlabs; else mock). "
+            "When both keys are set, cartesia wins (lower streaming latency). "
+            "'mock' forces MockTTS regardless of env vars. "
+            "'cartesia' forces CartesiaTTS (mock path when CARTESIA_API_KEY is absent). "
+            "'elevenlabs' forces ElevenLabsTTS (mock path when ELEVENLABS_API_KEY is absent)."
+        ),
+    ),
 ) -> None:
     """Score the bundled mock pipeline over the bundled golden set."""
+    _validate_judge_flag(judge)
+    _validate_stt_flag(stt)
+    _validate_tts_flag(tts)
+    # Construct the judge before the eval so OSError (missing key) and
+    # ImportError (missing httpx) get a friendly message, narrowly scoped —
+    # no risk of swallowing a legitimate OSError from inside the eval loop.
+    try:
+        judge_instance = make_judge(mode=judge)
+    except (OSError, ImportError) as exc:
+        console.print(f"[red]judge error:[/] {exc}")
+        raise typer.Exit(code=2) from None
+    stt_instance = _make_stt_from_flag(stt)
+    tts_instance = _make_tts_from_flag(tts)
     try:
         report = _run_eval(
             wer_substitution_rate=wer_substitution_rate,
             false_trigger_rate=false_trigger_rate,
+            judge=judge_instance,
+            notes_fixture=with_notes,
+            audio_fixtures=audio_fixtures,
+            stt=stt_instance,
+            tts=tts_instance,
         )
     except IncompleteRunError as exc:
         console.print(f"[red]incomplete run:[/] {exc}")
@@ -389,6 +729,16 @@ def compare(
     except ValidationError as exc:
         console.print(f"[red]baseline failed validation:[/] {exc}")
         raise typer.Exit(code=2) from None
+    # Guard --out path before running the harness so a bad path (e.g. /tmp
+    # on macOS, which is a symlink to /private/tmp) fails fast, mirroring
+    # the `run` subcommand's ordering.
+    if out is not None:
+        try:
+            _assert_no_symlink_ancestor(out)
+        except typer.BadParameter as exc:
+            raise typer.BadParameter(str(exc)) from None
+        if out.is_symlink():
+            raise typer.BadParameter(f"refusing to write to symlink: {out}")
     try:
         current = _run_eval(
             wer_substitution_rate=wer_substitution_rate,
@@ -472,3 +822,378 @@ def render(
         raise typer.BadParameter(f"unknown format: {fmt!r}")
     _safe_write_text(out, body)
     console.print(f"[green]wrote[/] {out}")
+
+
+@app.command()
+def calibrate(
+    labels: Path = typer.Option(
+        Path("evals/calibration.csv"),
+        help="CSV file with human-labelled question/answer pairs.",
+    ),
+    out: Path = typer.Option(
+        Path("evals/CALIBRATION.md"),
+        help="Output Markdown report with kappa value and divergence cases.",
+    ),
+    judge: str = typer.Option(
+        "auto",
+        help=(
+            "Judge backend for LLM scoring: 'auto', 'llm', or 'substring'. "
+            "Using 'substring' computes kappa against the substring proxy, "
+            "not a real LLM — useful for testing the harness itself."
+        ),
+    ),
+) -> None:
+    """Compute Cohen's kappa between human labels and the LLM judge.
+
+    Reads a CSV of human-labelled question/answer pairs, runs the judge
+    over the same set, and computes Cohen's kappa.  Writes a Markdown
+    report to --out.
+
+    \\b
+    WARNING: The bundled evals/calibration.csv contains placeholder human
+    labels.  The kappa value is meaningless until real human annotations
+    replace the human_score column.
+    """
+    _validate_judge_flag(judge)
+    try:
+        from voice_eval_lab.judge.calibration import calibration_cli_main
+
+        calibration_cli_main(csv_path=labels, out_path=out, judge_mode=judge)
+        console.print(f"[green]wrote calibration report[/] {out}")
+    except FileNotFoundError:
+        console.print(f"[red]calibration CSV not found:[/] {labels}")
+        raise typer.Exit(code=2) from None
+    except ValueError as exc:
+        console.print(f"[red]calibration CSV error:[/] {exc}")
+        raise typer.Exit(code=2) from None
+    except OSError as exc:
+        console.print(f"[red]judge configuration error:[/] {exc}")
+        raise typer.Exit(code=2) from None
+
+
+# ---------------------------------------------------------------------------
+# Notes sub-app
+# ---------------------------------------------------------------------------
+
+# Module-level singleton used by the notes CLI commands so that add / lookup /
+# clear within a single shell session share state.  Re-using the same process
+# (e.g. CliRunner in tests) preserves state between calls, which is the
+# desired behaviour for integration tests that chain add → lookup.
+_notes_store_singleton: NotesStore | None = None
+
+
+def _get_notes_store() -> NotesStore:
+    """Return the module-level InMemoryNotesStore, creating it on first call."""
+    global _notes_store_singleton
+    if _notes_store_singleton is None:
+        _notes_store_singleton = InMemoryNotesStore()
+    return _notes_store_singleton
+
+
+@notes_app.command("add")
+def notes_add(
+    note_id: str = typer.Option(..., "--id", help="Unique identifier for the note."),
+    text: str = typer.Option(..., "--text", help="Note text to store and embed."),
+) -> None:
+    """Add a note to the in-memory notes store."""
+    store = _get_notes_store()
+
+    async def _go() -> None:
+        await store.add_note(note_id=note_id, text=text)
+
+    asyncio.run(_go())
+    console.print(f"[green]added note[/] {note_id!r}")
+
+
+@notes_app.command("lookup")
+def notes_lookup(
+    query: str = typer.Option(..., "--query", help="Free-text query to search notes."),
+    top_k: int = typer.Option(3, "--top-k", help="Number of hits to return."),
+    fixture: Path | None = typer.Option(
+        None,
+        "--fixture",
+        help=(
+            "Optional notes fixture JSON to load before querying. "
+            "Entries are merged with any notes already in the store."
+        ),
+    ),
+) -> None:
+    """Look up the most relevant notes for a query."""
+    store = _get_notes_store()
+
+    # Load fixture synchronously (before entering the event loop) to avoid
+    # nested asyncio.run() calls.
+    pre_loaded_fixture = _load_notes_fixture(fixture) if fixture is not None else None
+
+    async def _go() -> None:
+        if pre_loaded_fixture is not None:
+            # Merge fixture notes into the singleton store.
+            for rec in pre_loaded_fixture._records:
+                await store.add_note(
+                    note_id=rec.note_id,
+                    text=rec.text,
+                    embedding=rec.embedding.tolist(),
+                )
+        hits = await store.lookup(query, top_k=top_k)
+        if not hits:
+            console.print("[dim]no notes found[/]")
+            return
+        table = Table(title=f"Top {len(hits)} notes for {query!r}")
+        table.add_column("note_id")
+        table.add_column("score", justify="right")
+        table.add_column("text")
+        for hit in hits:
+            table.add_row(hit.note_id, f"{hit.score:.4f}", hit.text)
+        console.print(table)
+
+    asyncio.run(_go())
+
+
+@notes_app.command("clear")
+def notes_clear() -> None:
+    """Remove all notes from the in-memory notes store."""
+    store = _get_notes_store()
+
+    async def _go() -> None:
+        await store.clear()
+
+    asyncio.run(_go())
+    console.print("[green]notes store cleared[/]")
+
+
+# ---------------------------------------------------------------------------
+# serve sub-command
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def serve(
+    host: str = typer.Option("0.0.0.0", help="Bind host."),
+    port: int = typer.Option(8000, help="Bind port."),
+    reload: bool = typer.Option(False, "--reload", help="Enable uvicorn auto-reload."),
+) -> None:
+    """Start the FastAPI backend with uvicorn.
+
+    Reads BACKEND_AUTH_TOKEN, BACKEND_DSN, LIVEKIT_API_KEY, and
+    LIVEKIT_API_SECRET from the environment. Logs which features are
+    active (auth, store mode, LiveKit).
+    """
+    import os
+
+    try:
+        import uvicorn
+    except ImportError:
+        console.print(
+            "[red]uvicorn is not installed.[/] "
+            "Install with: pip install 'voice-eval-lab[real]'"
+        )
+        raise typer.Exit(code=2) from None
+
+    auth_enabled = bool(os.environ.get("BACKEND_AUTH_TOKEN"))
+    backend_dsn = os.environ.get("BACKEND_DSN", "")
+    lk_enabled = bool(
+        os.environ.get("LIVEKIT_API_KEY") and os.environ.get("LIVEKIT_API_SECRET")
+    )
+
+    console.print("[bold]voice-eval serve[/] starting up")
+    console.print(
+        f"  auth      : {'enabled' if auth_enabled else '[yellow]DISABLED[/] (set BACKEND_AUTH_TOKEN)'}"
+    )
+    console.print(
+        f"  store     : {'postgres (' + backend_dsn[:30] + '…)' if backend_dsn else 'in-memory'}"
+    )
+    console.print(
+        f"  livekit   : {'enabled' if lk_enabled else '[yellow]gated[/] (set LIVEKIT_API_KEY + LIVEKIT_API_SECRET)'}"
+    )
+
+    uvicorn.run(
+        "voice_eval_lab.backend.app:create_app",
+        factory=True,
+        host=host,
+        port=port,
+        reload=reload,
+    )
+
+
+# ---------------------------------------------------------------------------
+# pipeline sub-app
+# ---------------------------------------------------------------------------
+
+
+@pipeline_app.command("run")
+def pipeline_run(
+    turn_detector: str = typer.Option(
+        "smart",
+        "--turn-detector",
+        help=(
+            "Turn-detection mode: 'smart' (default) uses SmartTurnDetector with "
+            "Pipecat SmartTurnAnalyzer when available, else energy-based silence "
+            "fallback. 'none' disables turn detection (no-op stub)."
+        ),
+    ),
+) -> None:
+    """Drive the mock pipeline through Pipecat processors and print a transcript.
+
+    Feeds a single synthetic audio chunk (representing the utterance
+    "hnsw ef_search parameter") through the full STT → LLM → TTS chain and
+    prints each agent Turn returned. Useful for verifying the processor
+    wiring without a LiveKit room.
+    """
+    _validate_turn_detector_flag(turn_detector)
+
+    from voice_eval_lab.models import Turn, TurnRole
+    from voice_eval_lab.pipecat import run_pipeline
+    from voice_eval_lab.pipecat.pipeline import build_pipeline
+    from voice_eval_lab.pipecat.processors import AudioRawFrame
+    from voice_eval_lab.pipeline import MockLLM, MockSTT, MockTTS
+
+    pipeline = build_pipeline(
+        stt=MockSTT(), llm=MockLLM(), tts=MockTTS(), turn_detector=turn_detector
+    )
+
+    # Patch the STTProcessor so it returns a canned utterance — the mock STT
+    # requires a Turn with text, not raw audio bytes.
+    stt_proc = pipeline.processors()[0]
+
+    def _fake_turn(frame: AudioRawFrame) -> Turn:
+        return Turn(
+            role=TurnRole.USER,
+            text="hnsw ef_search parameter",
+            started_at_ms=0,
+            ended_at_ms=200,
+        )
+
+    stt_proc._frame_to_turn = _fake_turn
+
+    console.print("[bold]voice-eval pipeline run[/] (in-memory smoke test)")
+    console.print("Audio source : synthetic 320-byte frame")
+    console.print("Pipeline     : MockSTT → MockLLM → MockTTS (via Pipecat processors)\n")
+
+    async def _go() -> None:
+        async for turn in await run_pipeline(
+            pipeline,
+            audio_source=[b"\x00" * 320],
+        ):
+            console.print(f"[green]agent[/]: {turn.text}")
+
+    asyncio.run(_go())
+    console.print("\n[green]pipeline run complete[/]")
+
+
+@pipeline_app.command("serve")
+def pipeline_serve(
+    room: str = typer.Option(..., "--room", help="LiveKit room name to connect to."),
+    livekit_url: str = typer.Option(
+        "",
+        "--livekit-url",
+        help=(
+            "LiveKit server URL (e.g. wss://my-app.livekit.cloud). "
+            "Falls back to LIVEKIT_URL env var."
+        ),
+    ),
+    api_key: str = typer.Option(
+        "",
+        "--api-key",
+        help="LiveKit API key. Falls back to LIVEKIT_API_KEY env var.",
+    ),
+    api_secret: str = typer.Option(
+        "",
+        "--api-secret",
+        help="LiveKit API secret. Falls back to LIVEKIT_API_SECRET env var.",
+    ),
+) -> None:
+    """Connect the mock Pipecat pipeline to a LiveKit room and serve it.
+
+    Reads LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET from the
+    environment (or from the explicit flags). When any credential is missing
+    or when livekit-agents is not installed, logs a warning and exits cleanly
+    — no exception is raised, making this safe to call in CI.
+    """
+    from voice_eval_lab.pipecat import make_pipecat_pipeline, serve_on_livekit
+
+    pipeline = make_pipecat_pipeline()
+
+    console.print(f"[bold]voice-eval pipeline serve[/] room={room!r}")
+
+    serve_on_livekit(
+        pipeline,
+        room_name=room,
+        livekit_url=livekit_url or None,
+        api_key=api_key or None,
+        api_secret=api_secret or None,
+    )
+    console.print("[dim]pipeline serve returned (credentials absent or SDK not installed)[/]")
+
+
+# ---------------------------------------------------------------------------
+# audio sub-app
+# ---------------------------------------------------------------------------
+
+
+@audio_app.command("populate-silence")
+def audio_populate_silence(
+    conv_id: str = typer.Option(..., "--conv-id", help="Conversation ID for the fixture."),
+    turn: int = typer.Option(..., "--turn", help="Zero-based user-turn index."),
+    duration_ms: int = typer.Option(500, "--duration-ms", help="Silence duration in ms."),
+    root: Path = typer.Option(Path("evals/audio"), "--root", help="Audio fixture root directory."),
+) -> None:
+    """Generate a silence WAV fixture and write it to the fixture tree."""
+    from voice_eval_lab.audio import FilesystemAudioStore, SilenceFixtureGenerator
+
+    gen = SilenceFixtureGenerator()
+    wav_bytes = gen.generate(duration_ms)
+    store = FilesystemAudioStore(root)
+    store.add_audio(conv_id, turn, wav_bytes)
+    dest = root / conv_id / f"turn-{turn:02d}.wav"
+    console.print(f"[green]wrote[/] {dest} ({len(wav_bytes)} bytes, {duration_ms}ms silence)")
+
+
+@audio_app.command("import")
+def audio_import(
+    src: Path = typer.Argument(..., help="Source WAV file to import."),
+    conv_id: str = typer.Option(..., "--conv-id", help="Conversation ID for the fixture."),
+    turn: int = typer.Option(..., "--turn", help="Zero-based user-turn index."),
+    root: Path = typer.Option(Path("evals/audio"), "--root", help="Audio fixture root directory."),
+) -> None:
+    """Copy a real WAV file into the audio fixture tree."""
+    from voice_eval_lab.audio import FilesystemAudioStore
+
+    if not src.exists():
+        console.print(f"[red]source WAV not found:[/] {src}")
+        raise typer.Exit(code=2) from None
+    try:
+        wav_bytes = src.read_bytes()
+    except OSError as exc:
+        console.print(f"[red]could not read {src}:[/] {exc}")
+        raise typer.Exit(code=2) from None
+    store = FilesystemAudioStore(root)
+    try:
+        store.add_audio(conv_id, turn, wav_bytes)
+    except ValueError as exc:
+        console.print(f"[red]invalid WAV file:[/] {exc}")
+        raise typer.Exit(code=2) from None
+    dest = root / conv_id / f"turn-{turn:02d}.wav"
+    console.print(f"[green]imported[/] {src} -> {dest} ({len(wav_bytes)} bytes)")
+
+
+@audio_app.command("list")
+def audio_list(
+    root: Path = typer.Option(Path("evals/audio"), "--root", help="Audio fixture root directory."),
+) -> None:
+    """List all audio fixture keys under the fixture root."""
+    from voice_eval_lab.audio import FilesystemAudioStore
+
+    store = FilesystemAudioStore(root)
+    keys = store.list_keys()
+    if not keys:
+        console.print(f"[dim]no fixtures found under {root}[/]")
+        return
+    table = Table(title=f"Audio fixtures ({root})")
+    table.add_column("conv_id")
+    table.add_column("turn_index", justify="right")
+    table.add_column("path")
+    for conv_id, turn_index in keys:
+        p = root / conv_id / f"turn-{turn_index:02d}.wav"
+        table.add_row(conv_id, str(turn_index), str(p))
+    console.print(table)
+    console.print(f"[dim]{len(keys)} fixture(s)[/]")

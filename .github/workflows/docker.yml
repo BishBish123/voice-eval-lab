@@ -1,0 +1,53 @@
+name: docker
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  docker-build-and-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build --tag voice-eval-lab:ci .
+
+      - name: Run container (in-memory store, no auth)
+        run: |
+          docker run --detach \
+            --name voice-eval-lab-smoke \
+            --publish 8000:8000 \
+            voice-eval-lab:ci
+
+      - name: Poll /healthz until ready (60s timeout)
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8000/healthz > /dev/null 2>&1; then
+              echo "Service healthy after ${i}s"
+              curl -sS http://localhost:8000/healthz | python3 -m json.tool
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "ERROR: /healthz did not respond within 60s" >&2
+          docker logs voice-eval-lab-smoke >&2
+          exit 1
+
+      - name: Verify /healthz returns status ok
+        run: |
+          STATUS=$(curl -sS http://localhost:8000/healthz | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])")
+          if [[ "$STATUS" != "ok" ]]; then
+            echo "ERROR: /healthz returned status='$STATUS', expected 'ok'" >&2
+            exit 1
+          fi
+          echo "Health check passed: status=$STATUS"
+
+      - name: Stop and remove container
+        if: always()
+        run: docker rm -f voice-eval-lab-smoke || true

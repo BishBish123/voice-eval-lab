@@ -768,6 +768,13 @@ def render_report(report: EvalReport) -> str:
     decisiveness_cell = _pct_or_na(report.aggregate_llm_decisiveness)
     lines.append(f"| LLM decisiveness (corpus-pooled) | {decisiveness_cell} |")
     lines.append("")
+    lines.append(
+        "> Faithfulness defaults to the substring proxy (no API keys required). "
+        "Set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` and run "
+        "`voice-eval run --judge llm` to score with the LLM-as-judge — see "
+        "`evals/INTERPRETATION.md#response-faithfulness-corpus-pooled`."
+    )
+    lines.append("")
     lines.append("## Per conversation")
     lines.append("")
     lines.append(

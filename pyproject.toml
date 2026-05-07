@@ -1,6 +1,6 @@
 [project]
 name = "voice-eval-lab"
-version = "0.1.0"
+version = "0.2.0"
 description = "Eval harness + reference pipeline for real-time voice agents: 9 metrics covering turn latency, WER, faithfulness, barge-in success/yield, false-trigger rate, TTS jitter, endpointing accuracy, and LLM decisiveness."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
@@ -37,9 +37,21 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.6",
     "mypy>=1.11",
+    "httpx>=0.27",  # for tests of the [real] adapter HTTP paths
 ]
 plot = [
     "matplotlib>=3.8",  # reserved for future score plotting helpers
+]
+real = [
+    "httpx>=0.27",  # required by the Groq / Deepgram / Cartesia real-HTTP adapters
+    "asyncpg>=0.29",  # required by PgVectorNotesStore and PostgresSessionStore
+    "pgvector>=0.3",  # required by PgVectorNotesStore (asyncpg integration)
+    "fastapi>=0.115",  # required by the backend FastAPI app
+    "uvicorn>=0.30",  # required by voice-eval serve
+    "pyjwt[crypto]>=2.9",  # required for LiveKit JWT signing
+    "pipecat-ai>=1.1.0",  # Pipecat voice agent framework (verified pypi.org 2026-05-06)
+    "livekit-agents>=1.5.8",  # LiveKit agent SDK (verified pypi.org 2026-05-06)
+    "openai-whisper>=20250625",  # local Whisper STT (verified pypi.org/project/openai-whisper/ 2026-05-06)
 ]
 
 [build-system]
@@ -59,8 +71,21 @@ select = ["E", "W", "F", "I", "B", "UP", "SIM", "PL", "RUF", "ASYNC", "S"]
 ignore = ["PLR0913", "PLR2004", "E501", "S101", "S603", "S607"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["PLR2004", "S101", "ASYNC"]
-"src/voice_eval_lab/cli.py" = ["B008", "ASYNC240"]
+"tests/**" = ["PLR2004", "S101", "ASYNC", "PLC0415", "S106"]
+"src/voice_eval_lab/cli.py" = ["B008", "ASYNC240", "PLR0912", "PLC0415", "PLW0603", "S104", "ASYNC"]
+"src/voice_eval_lab/pipecat/processors.py" = ["PLC0415", "B027"]
+"src/voice_eval_lab/pipecat/pipeline.py" = ["PLC0415", "B027", "RUF029"]
+"src/voice_eval_lab/pipecat/livekit.py" = ["PLC0415", "RUF029"]
+"src/voice_eval_lab/judge/calibration.py" = ["RUF001"]  # en-dashes intentional in kappa interpretation table
+"src/voice_eval_lab/adapters/whisper.py" = ["PLC0415"]  # lazy imports gate optional openai-whisper
+"src/voice_eval_lab/judge/factory.py" = ["PLC0415"]  # lazy imports gate optional httpx
+"src/voice_eval_lab/judge/llm.py" = ["PLC0415"]  # lazy imports gate optional httpx
+"src/voice_eval_lab/notes/factory.py" = ["PLC0415"]  # lazy imports select backend at call time
+"src/voice_eval_lab/notes/memory.py" = ["PLC0415"]  # lazy import gates optional sentence-transformers
+"src/voice_eval_lab/notes/pgvector.py" = ["PLC0415"]  # lazy imports gate optional asyncpg/pgvector
+"src/voice_eval_lab/backend/app.py" = ["PLC0415"]  # lazy import gates optional pyjwt
+"src/voice_eval_lab/backend/auth.py" = ["PLW0603"]  # module-level state is intentional for auth config
+"src/voice_eval_lab/backend/store.py" = ["PLC0415"]  # lazy import gates optional asyncpg
 
 [tool.ruff.format]
 docstring-code-format = true
@@ -72,6 +97,13 @@ files = ["src"]
 ignore_missing_imports = true
 disallow_untyped_decorators = false
 
+[[tool.mypy.overrides]]
+# The pipecat package files use conditional imports (soft-import pattern)
+# and type: ignore comments that are valid only when pipecat-ai is installed.
+# Mypy runs without the SDK so unused-ignore errors are expected; suppress them.
+module = "voice_eval_lab.pipecat.*"
+warn_unused_ignores = false
+
 [tool.pytest.ini_options]
 minversion = "8.0"
 addopts = ["-ra", "--strict-markers", "--strict-config", "--showlocals"]
@@ -79,6 +111,16 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
     "integration: tests requiring real STT/LLM/TTS services",
-    "slow: tests > ~1s",
+    "slow: tests that take more than ~1s",
 ]
-filterwarnings = ["error", "ignore::DeprecationWarning"]
+asyncio_default_fixture_loop_scope = "session"
+filterwarnings = [
+    "error",
+    "ignore::DeprecationWarning",
+    # ResourceWarnings emitted by the asyncio event-loop GC when pytest-asyncio
+    # tears down the loop after async tests (unclosed selector / transport
+    # warnings from typer.testing.CliRunner's internal loop).  Scoped to the
+    # asyncio module so genuine leaks in adapter code (e.g. an unclosed
+    # httpx.AsyncClient) will still surface as warnings.
+    "ignore::ResourceWarning:asyncio",
+]
