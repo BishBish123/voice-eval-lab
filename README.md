@@ -48,10 +48,16 @@ What's *not* here yet:
 - Real LiveKit / Deepgram / Cartesia adapters. They drop in behind
   the same `STT` / `LLM` / `TTS` Protocols. The repo's value is the
   harness around them.
-- An LLM-judge faithfulness scorer. The current proxy is "did the
-  reply quote any gold fact verbatim?". The same
-  `response_faithfulness` function name + signature would be used by
-  an LLM judge.
+- An LLM-judge faithfulness scorer. The current proxy is an
+  NFKC-normalized substring match — does the (lowercased, NFKC-folded)
+  reply contain any gold fact as a contiguous substring? It catches
+  cosmetic Unicode variants (fullwidth ASCII, composed/decomposed
+  accents) that a raw byte compare would miss, but it is still a
+  heuristic: it ignores word boundaries (a fact "ef search" matches
+  inside "chef searches"), can't detect partial paraphrases, and gives
+  no signal on conversations with no gold facts. In production this
+  swaps to an LLM judge behind the same `response_faithfulness`
+  function name + signature.
 - Phoenix tracing wired in. Every `PipelineSpan` already has the
   OpenTelemetry shape — adding a Phoenix exporter is a one-file
   change.
