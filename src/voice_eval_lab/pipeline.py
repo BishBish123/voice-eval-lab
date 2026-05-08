@@ -16,7 +16,6 @@ from __future__ import annotations
 import asyncio
 import random
 import re
-import time
 import unicodedata
 from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass, field
@@ -205,30 +204,40 @@ class RetryingTTS:
     base_delay_ms: int = 25
 
     async def synthesize(self, text: str) -> tuple[int, list[PipelineSpan]]:
-        # Cumulative wall-clock from the first invocation. The downstream
-        # tts_first_byte span uses whatever we return here, so reporting
-        # only the successful attempt's elapsed time hides retry/backoff
-        # cost from latency budgets and headline metrics.
-        t0 = time.monotonic()
+        # The downstream tts_first_byte span uses whatever we return here,
+        # so reporting only the successful attempt's elapsed time hides
+        # retry/backoff cost from latency budgets and headline metrics.
+        # We accumulate the configured backoff for each retry attempt and
+        # add the successful inner call's reported first-byte ms — that
+        # way the returned latency is deterministic (no wall-clock jitter
+        # from `time.monotonic()`) and the `tts.retry` span durations
+        # correspond to wall-clock time we actually slept.
         last_exc: BaseException | None = None
         retry_spans: list[PipelineSpan] = []
+        total_backoff_ms = 0
         for attempt in range(1, self.max_attempts + 1):
             try:
-                _inner_first_byte, spans = await self.inner.synthesize(text)
-                cumulative_ms = int((time.monotonic() - t0) * 1000)
-                return cumulative_ms, [*retry_spans, *spans]
+                inner_first_byte, spans = await self.inner.synthesize(text)
+                return total_backoff_ms + inner_first_byte, [*retry_spans, *spans]
             except RETRYABLE_TTS_ERRORS as exc:
                 last_exc = exc
+                backoff_ms = self.base_delay_ms * (2 ** (attempt - 1))
                 retry_spans.append(
                     PipelineSpan(
                         name="tts.retry",
                         started_at_ms=0,
-                        ended_at_ms=self.base_delay_ms * (2 ** (attempt - 1)),
+                        ended_at_ms=backoff_ms,
                         attrs={"attempt": str(attempt), "error": type(exc).__name__},
                     )
                 )
                 if attempt < self.max_attempts:
-                    await asyncio.sleep(0)  # cooperative yield, no real wall delay
+                    # Actually wait the configured backoff so the
+                    # `tts.retry` span duration matches real wall-clock
+                    # time. The previous `sleep(0)` only yielded
+                    # cooperatively, so the advertised backoff was
+                    # invisible to latency consumers.
+                    total_backoff_ms += backoff_ms
+                    await asyncio.sleep(backoff_ms / 1000.0)
         assert last_exc is not None
         raise last_exc
 

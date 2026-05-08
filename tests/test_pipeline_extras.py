@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
+import time
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
 
 import pytest
 
@@ -18,7 +17,6 @@ from voice_eval_lab.models import (
     TurnRole,
 )
 from voice_eval_lab.pipeline import (
-    TTS,
     FlakyTTS,
     LatencyBudget,
     MockLLM,
@@ -28,27 +26,6 @@ from voice_eval_lab.pipeline import (
     VoicePipeline,
     _inject_wer,
 )
-
-
-@dataclass
-class SlowFlakyTTS:
-    """TTS adapter that takes ~`per_attempt_ms` real ms per attempt and fails the first `fail_n`.
-
-    Used to verify RetryingTTS reports *cumulative* wall-clock latency,
-    not just the last attempt's elapsed time.
-    """
-
-    inner: TTS
-    fail_n: int = 0
-    per_attempt_ms: int = 50
-    _calls: int = field(default=0, init=False)
-
-    async def synthesize(self, text: str) -> tuple[int, list[PipelineSpan]]:
-        self._calls += 1
-        await asyncio.sleep(self.per_attempt_ms / 1000.0)
-        if self._calls <= self.fail_n:
-            raise RuntimeError(f"SlowFlakyTTS scheduled failure #{self._calls}")
-        return await self.inner.synthesize(text)
 
 # ---------------------------------------------------------------------------
 # RetryingTTS
@@ -60,9 +37,9 @@ class TestRetryingTTS:
         flaky = FlakyTTS(inner=MockTTS(), fail_n=1)
         wrapped = RetryingTTS(inner=flaky, max_attempts=3)
         first_byte, spans = await wrapped.synthesize("hello")
-        # RetryingTTS now returns cumulative wall-clock ms — with MockTTS
-        # (no real sleeps) that's ~0ms. The span timing is what matters.
-        assert first_byte >= 0
+        # Returned latency = configured backoff (default 25ms for the
+        # one retry) + inner first-byte (MockTTS default 75ms) = 100ms.
+        assert first_byte == 100
         # one tts.retry span + one tts.synthesize span
         names = [s.name for s in spans]
         assert names.count("tts.retry") == 1
@@ -71,8 +48,8 @@ class TestRetryingTTS:
     async def test_succeeds_immediately_with_zero_failures(self) -> None:
         wrapped = RetryingTTS(inner=MockTTS(), max_attempts=3)
         first_byte, spans = await wrapped.synthesize("hello")
-        # MockTTS doesn't sleep, so cumulative wall-clock is ~0.
-        assert first_byte >= 0
+        # No retries -> returned latency is exactly the inner first-byte.
+        assert first_byte == 75
         assert all(s.name != "tts.retry" for s in spans)
 
     async def test_raises_after_max_attempts(self) -> None:
@@ -98,21 +75,22 @@ class TestRetryingTTS:
         assert durations == [10, 20]
 
     async def test_retrying_tts_reports_cumulative_first_byte(self) -> None:
-        # Two failed attempts (~50ms each) + one success (~50ms) ≈ 150ms.
-        # The previous implementation only reported the success leg's
-        # elapsed time, hiding the retry cost from latency budgets.
-        slow = SlowFlakyTTS(inner=MockTTS(), fail_n=2, per_attempt_ms=50)
-        wrapped = RetryingTTS(inner=slow, max_attempts=3, base_delay_ms=1)
+        # Two failed attempts each with 50ms backoff + one successful
+        # inner call returning MockTTS(first_byte_ms=75). Returned latency
+        # is now deterministic: backoff (50 + 100) + inner (75) = 225ms.
+        # The previous implementation only reported the success leg, which
+        # hid retry/backoff cost from latency budgets.
+        flaky = FlakyTTS(inner=MockTTS(), fail_n=2)
+        wrapped = RetryingTTS(inner=flaky, max_attempts=3, base_delay_ms=50)
         first_byte, _ = await wrapped.synthesize("hi")
-        # Allow generous tolerance for async scheduler jitter; the bug
-        # would have produced ~50, the fix produces ~150.
-        assert 120 <= first_byte <= 400, f"expected ~150ms cumulative, got {first_byte}"
+        # Exact: 50 (attempt 1 backoff) + 100 (attempt 2 backoff) + 75 (inner) = 225.
+        assert first_byte == 225
 
     async def test_retrying_tts_first_byte_in_pipeline_span(self) -> None:
         # End-to-end: VoicePipeline must surface the cumulative latency in
         # the tts_first_byte span so latency-budget metrics see it.
-        slow = SlowFlakyTTS(inner=MockTTS(), fail_n=2, per_attempt_ms=50)
-        wrapped = RetryingTTS(inner=slow, max_attempts=3, base_delay_ms=1)
+        flaky = FlakyTTS(inner=MockTTS(), fail_n=2)
+        wrapped = RetryingTTS(inner=flaky, max_attempts=3, base_delay_ms=50)
         pipeline = VoicePipeline(stt=MockSTT(), llm=MockLLM(), tts=wrapped)
         # Build a one-user-turn conversation.
         conv = Conversation(
@@ -126,14 +104,41 @@ class TestRetryingTTS:
         assert len(run.turn_runs) == 1
         spans = run.turn_runs[0].spans
         fb = next(s for s in spans if s.name == "tts_first_byte")
-        # The span ends at ended_at_ms = vad_end + stt + llm + tts. The
-        # cumulative TTS leg should now be ~150ms (not ~50ms).
-        # MockSTT default latency 80ms, MockLLM default 120ms, so the TTS
-        # contribution is ended_at_ms - started_at_ms.
+        # The TTS contribution to the span is what RetryingTTS returned:
+        # 50 + 100 + 75 = 225ms.
         tts_contribution = fb.ended_at_ms - fb.started_at_ms
-        assert 120 <= tts_contribution <= 400, (
-            f"expected ~150ms cumulative TTS leg in span, got {tts_contribution}"
-        )
+        assert tts_contribution == 225
+
+    async def test_retrying_tts_no_retry_returns_inner_latency_exactly(self) -> None:
+        # Zero retries -> returned latency is exactly the inner adapter's
+        # reported first-byte ms (75 from MockTTS default), with no
+        # scheduler-dependent jitter from time.monotonic().
+        wrapped = RetryingTTS(inner=MockTTS(), max_attempts=3, base_delay_ms=50)
+        first_byte, _ = await wrapped.synthesize("hi")
+        assert first_byte == 75
+
+    async def test_retrying_tts_includes_real_backoff_in_returned_latency(self) -> None:
+        # One failure, base_delay_ms=50 -> single 50ms backoff added to
+        # the inner 75ms. Returned latency = 125ms exactly.
+        flaky = FlakyTTS(inner=MockTTS(), fail_n=1)
+        wrapped = RetryingTTS(inner=flaky, max_attempts=3, base_delay_ms=50)
+        first_byte, _ = await wrapped.synthesize("hi")
+        assert first_byte == 125
+
+    async def test_retrying_tts_actually_sleeps(self) -> None:
+        # The previous implementation called `asyncio.sleep(0)` between
+        # retries (cooperative yield only) so the configured backoff was
+        # advertised in span durations but never actually elapsed. With a
+        # 40ms base delay and one failure, real wall-clock between call
+        # entry and return must include at least the configured backoff.
+        flaky = FlakyTTS(inner=MockTTS(), fail_n=1)
+        wrapped = RetryingTTS(inner=flaky, max_attempts=3, base_delay_ms=40)
+        t0 = time.monotonic()
+        await wrapped.synthesize("hi")
+        elapsed_ms = (time.monotonic() - t0) * 1000.0
+        # Allow scheduler slop on the upper end but require at least
+        # ~30ms elapsed (the bug would have returned in <1ms).
+        assert elapsed_ms >= 30, f"expected real backoff >=30ms, got {elapsed_ms:.1f}ms"
 
 
 # ---------------------------------------------------------------------------
