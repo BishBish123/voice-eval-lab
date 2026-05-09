@@ -423,6 +423,38 @@ def score_conversation(
     *,
     barge_in_budget_ms: int = DEFAULT_PIPELINE_BARGE_IN_BUDGET_MS,
 ) -> ConversationScore:
+    """Score a single (conversation, run) pair.
+
+    Each metric resolves its zero-signal case to a value rather than
+    refusing to score, so a single empty conversation can still produce
+    a row in the report. The choices are deliberately asymmetric:
+
+    - ``response_faithfulness``: ``1.0`` when the conversation has no
+      ``gold_facts`` (vacuously true — nothing to be unfaithful to);
+      ``0.0`` when gold facts exist but every counted reply failed to
+      ground against any of them. Replies on ``false_trigger`` turns are
+      excluded from the denominator.
+    - ``false_trigger_rate``: ``0.0`` when the conversation has no user
+      turns. The denominator is the user-turn opportunity count, not
+      ``len(run.turn_runs)``, so injected synthetic false-triggers
+      (which the pipeline appends as extra TurnRuns) cannot pull the
+      rate below 1.0 at a configured rate of 1.0.
+    - ``endpointing_accuracy``: ``None`` when no user turn produced a
+      measurable ``vad_end`` span — explicit "no signal" rather than
+      conflating it with 0.0 (every measured turn was wrong). ``1.0``
+      when the conversation has no user turns at all.
+    - ``llm_decisiveness``: ``1.0`` when no replies are counted (all
+      turns were ``false_trigger`` or the run was empty). Hedging is
+      detected via NFKC-normalized substring + word-boundary regex.
+
+    Pooled aggregates in :func:`score_run` follow a different
+    convention: they switch to ``None`` when the *entire run* lacks
+    measurable signal, so a per-conversation score of (e.g.) ``1.0`` on
+    a vacuous metric will not match the pooled aggregate, which excludes
+    that conversation from both numerator and denominator. This is
+    intentional — per-conversation rows must populate to keep the report
+    rectangular, but aggregates should not double-count vacuous cases.
+    """
     _check_turn_coverage(conversation, run)
     return ConversationScore(
         conv_id=conversation.conv_id,
