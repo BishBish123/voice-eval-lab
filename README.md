@@ -8,6 +8,18 @@
 
 ---
 
+## Prerequisites
+
+- **Python 3.11 or 3.12** (the package targets `>=3.11,<3.13`).
+- **[uv](https://docs.astral.sh/uv/)** for dependency / venv management
+  — every `make` target shells out through `uv run`.
+
+That's it. The bundled pipeline mocks STT / LLM / TTS end-to-end, so
+**no external services or API keys are required** to run the harness,
+the tests, or the eval — everything is deterministic and offline.
+
+---
+
 ## What this is (and what it isn't)
 
 The 2026 voice-agent moat isn't shipping a demo — it's *measuring*
