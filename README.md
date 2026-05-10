@@ -113,6 +113,21 @@ Two reports are tracked under `evals/`:
   `--wer-substitution-rate 0.1`, kept as a sample of what the WER
   metric looks like when STT actually drops words.
 
+To regenerate both at once (after a metric or pipeline change):
+
+```bash
+make eval-canonical
+```
+
+This rewrites `evals/REPORT.md`, `evals/scores.json`, and
+`evals/REPORT.with-wer-injection.md` from a clean run. Commit those
+files together so the tracked report and JSON never drift from the
+code that produced them.
+
+`evals/baseline.json` is **not** tracked — it's a per-user regression
+baseline written by `voice-eval baseline --save` and consumed by
+`voice-eval compare`. Each contributor maintains their own.
+
 Real numbers come from real adapters. The harness will produce the
 same shape.
 

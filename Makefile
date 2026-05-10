@@ -38,6 +38,12 @@ test-all: ## All tests
 eval: ## Run the eval harness on the bundled golden set
 	$(UV) run voice-eval run --out evals/REPORT.md --json evals/scores.json
 
+.PHONY: eval-canonical
+eval-canonical: ## Regenerate the tracked canonical report + WER-injection variant
+	$(UV) run voice-eval run --out evals/REPORT.md --json evals/scores.json
+	$(UV) run voice-eval run --wer-substitution-rate 0.1 \
+		--out evals/REPORT.with-wer-injection.md
+
 .PHONY: clean
 clean: ## Wipe caches
 	rm -rf .pytest_cache .mypy_cache .ruff_cache .coverage htmlcov build dist

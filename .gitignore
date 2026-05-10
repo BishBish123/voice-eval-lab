@@ -31,3 +31,8 @@ data/
 *.log
 *.wav
 *.mp3
+
+# Per-user eval baseline (created by `voice-eval baseline --save`).
+# The headline scores at evals/scores.json *are* tracked — only the
+# user-local regression baseline is ignored.
+evals/baseline.json
