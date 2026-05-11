@@ -184,9 +184,18 @@ uv run voice-eval list
 uv run voice-eval baseline --save evals/baseline.json
 uv run voice-eval compare --baseline evals/baseline.json
 
-# Re-render the latest scores as HTML.
+# Re-render the latest scores as HTML. `render` reads JSON, not
+# markdown — make sure the previous `run` was invoked with --json so
+# evals/scores.json exists.
+uv run voice-eval run --out evals/REPORT.md --json evals/scores.json
 uv run voice-eval render --from evals/scores.json --out evals/REPORT.html --format html
 ```
+
+> **Note:** `voice-eval render` reads from a `scores.json` produced
+> by a `--json` run. The markdown REPORT.md is a *render output*,
+> not a render input — re-running `render` against a markdown file
+> will not work. If `evals/scores.json` is missing, run `voice-eval
+> run --json evals/scores.json` first.
 
 ## Plug in real adapters
 
