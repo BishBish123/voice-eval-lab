@@ -30,10 +30,6 @@ check: lint typecheck
 test: ## Unit tests
 	$(UV) run pytest -m "not integration"
 
-.PHONY: test-all
-test-all: ## All tests
-	$(UV) run pytest
-
 .PHONY: eval
 eval: ## Run the eval harness on the bundled golden set
 	$(UV) run voice-eval run --out evals/REPORT.md --json evals/scores.json
