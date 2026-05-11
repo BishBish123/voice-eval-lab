@@ -87,7 +87,7 @@ Produces (with the bundled mock pipeline + golden set):
 | --- | ---: |
 | Conversations | 7 |
 | Turn latency p50 / p95 / p99 (ms) | 275 / 275 / 275 |
-| Transcription WER (corpus) | 0.00% |
+| Transcription WER (corpus-pooled) | 0.00% |
 | Response faithfulness (pooled) | 57.14% |
 | Barge-in success (pooled) | 100.00% |
 | False-trigger rate (pooled) | 0.00% |

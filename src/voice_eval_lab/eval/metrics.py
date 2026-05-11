@@ -686,7 +686,7 @@ def render_report(report: EvalReport) -> str:
         f"{report.aggregate_turn_latency.p95_ms:.0f} / "
         f"{report.aggregate_turn_latency.p99_ms:.0f} |"
     )
-    lines.append(f"| Transcription WER (corpus) | {report.aggregate_wer:.2%} |")
+    lines.append(f"| Transcription WER (corpus-pooled) | {report.aggregate_wer:.2%} |")
     faithfulness_cell = _pct_or_na(report.aggregate_faithfulness)
     lines.append(f"| Response faithfulness (pooled) | {faithfulness_cell} |")
     barge_success_cell = _pct_or_na(report.aggregate_barge_in_success)
@@ -783,7 +783,7 @@ def render_report_html(report: EvalReport) -> str:
                 f"{report.aggregate_turn_latency.p99_ms:.0f}"
             ),
         ),
-        row("Transcription WER (mean)", f"{report.aggregate_wer:.2%}"),
+        row("Transcription WER (corpus-pooled)", f"{report.aggregate_wer:.2%}"),
         row("Response faithfulness (pooled)", _pct_or_na(report.aggregate_faithfulness)),
         row("Barge-in success (pooled)", _pct_or_na(report.aggregate_barge_in_success)),
         row("False-trigger rate (pooled)", _pct_or_na(report.aggregate_false_trigger_rate)),

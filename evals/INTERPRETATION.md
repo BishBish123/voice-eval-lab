@@ -19,10 +19,12 @@ The gap between `vad_end` (the user stopped talking) and
   — real numbers depend on the LLM model, network path, and TTS
   engine.
 
-### Transcription WER (mean)
+### Transcription WER (corpus-pooled)
 
-Word-error rate from `jiwer` against the gold transcript, averaged
-across conversations.
+Word-error rate from `jiwer` computed over the corpus-pooled
+references and hypotheses (one big concatenation across every
+measurable user turn in every conversation), so a long conversation
+weighs proportionally more than a short one.
 
 - **<5%** is competitive with Deepgram Nova on clean-room audio.
 - **>10%** breaks downstream LLM faithfulness — the model can't
