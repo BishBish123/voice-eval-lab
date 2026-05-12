@@ -140,6 +140,39 @@ class TestCompareCommand:
         assert result.exit_code == 1, result.output
         assert "regression detected" in result.output
 
+    def test_compare_out_writes_diff_to_file(self, tmp_path: Path) -> None:
+        # `--out PATH` writes the rendered diff to disk while still
+        # printing it to stdout, so a CI step can attach the artifact
+        # without scraping console output.
+        baseline = tmp_path / "baseline.json"
+        runner.invoke(app, ["baseline", "--save", str(baseline)])
+        diff_out = tmp_path / "diff.md"
+        result = runner.invoke(
+            app,
+            ["compare", "--baseline", str(baseline), "--out", str(diff_out)],
+        )
+        assert result.exit_code == 0, result.output
+        assert "no regressions" in result.output
+        assert diff_out.exists()
+        body = diff_out.read_text()
+        assert body.endswith("\n")
+        assert body.strip(), "diff file should not be empty"
+
+    def test_compare_out_refuses_symlink(self, tmp_path: Path) -> None:
+        baseline = tmp_path / "baseline.json"
+        runner.invoke(app, ["baseline", "--save", str(baseline)])
+        target = tmp_path / "real.md"
+        target.write_text("placeholder")
+        link = tmp_path / "link.md"
+        link.symlink_to(target)
+        result = runner.invoke(
+            app,
+            ["compare", "--baseline", str(baseline), "--out", str(link)],
+        )
+        # _safe_write_text raises BadParameter; typer surfaces that as
+        # exit code 2.
+        assert result.exit_code != 0
+
 
 class TestRenderCommand:
     def _produce_scores(self, tmp_path: Path) -> Path:

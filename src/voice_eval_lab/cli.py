@@ -199,6 +199,15 @@ def compare(
     baseline_path: Path = typer.Option(
         ..., "--baseline", help="Baseline JSON file to diff against."
     ),
+    out: Path | None = typer.Option(
+        None,
+        "--out",
+        help=(
+            "Optional file path to write the rendered diff to. The diff is "
+            "still printed to stdout regardless; --out adds a copy on disk "
+            "for CI artifacts or PR comments."
+        ),
+    ),
     wer_substitution_rate: float = typer.Option(0.0, callback=_validate_unit_interval),
     false_trigger_rate: float = typer.Option(0.0, callback=_validate_unit_interval),
     latency_threshold_ms: float = typer.Option(10.0, help="Allowed p95 latency increase (ms)."),
@@ -236,7 +245,11 @@ def compare(
         faithfulness=faithfulness_threshold,
     )
     diffs = compare_reports(base, current, thresholds)
-    console.print(render_diffs(diffs))
+    rendered = render_diffs(diffs)
+    console.print(rendered)
+    if out is not None:
+        _safe_write_text(out, rendered + "\n" if not rendered.endswith("\n") else rendered)
+        console.print(f"[green]wrote diff to[/] {out}")
     if any(d.regressed for d in diffs):
         console.print("[red]regression detected[/]")
         sys.exit(1)
