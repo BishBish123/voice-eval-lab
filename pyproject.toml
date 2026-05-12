@@ -21,7 +21,6 @@ dependencies = [
     "typer>=0.12",
     "rich>=13.7",
     "jiwer>=3.0",  # word-error-rate calculator
-    "matplotlib>=3.8",
 ]
 
 [project.urls]
@@ -38,6 +37,9 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.6",
     "mypy>=1.11",
+]
+plot = [
+    "matplotlib>=3.8",  # reserved for future score plotting helpers
 ]
 
 [build-system]

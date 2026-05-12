@@ -761,7 +761,6 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "jiwer" },
-    { name = "matplotlib" },
     { name = "numpy" },
     { name = "pydantic" },
     { name = "rich" },
@@ -776,11 +775,14 @@ dev = [
     { name = "pytest-cov" },
     { name = "ruff" },
 ]
+plot = [
+    { name = "matplotlib" },
+]
 
 [package.metadata]
 requires-dist = [
     { name = "jiwer", specifier = ">=3.0" },
-    { name = "matplotlib", specifier = ">=3.8" },
+    { name = "matplotlib", marker = "extra == 'plot'", specifier = ">=3.8" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11" },
     { name = "numpy", specifier = ">=1.26,<3" },
     { name = "pydantic", specifier = ">=2.7" },
@@ -791,4 +793,4 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
     { name = "typer", specifier = ">=0.12" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["dev", "plot"]
