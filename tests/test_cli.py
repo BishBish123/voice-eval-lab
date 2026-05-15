@@ -85,6 +85,29 @@ class TestRunCommand:
         assert "could not write" in result.output
 
 
+class TestSymlinkAncestorGuard:
+    def test_run_rejects_symlinked_parent_directory(self, tmp_path: Path) -> None:
+        # Pre-plant a symlink in the parent chain: real_dir is the actual
+        # destination; link_dir points to it. Writing a report under
+        # link_dir must be refused before any bytes hit disk.
+        real_dir = tmp_path / "real"
+        real_dir.mkdir()
+        link_dir = tmp_path / "link"
+        link_dir.symlink_to(real_dir)
+        result = runner.invoke(app, ["run", "--out", str(link_dir / "REPORT.md")])
+        assert result.exit_code != 0
+        assert "symlink" in result.output.lower()
+
+    def test_baseline_rejects_symlinked_parent_directory(self, tmp_path: Path) -> None:
+        real_dir = tmp_path / "real"
+        real_dir.mkdir()
+        link_dir = tmp_path / "link"
+        link_dir.symlink_to(real_dir)
+        result = runner.invoke(app, ["baseline", "--save", str(link_dir / "baseline.json")])
+        assert result.exit_code != 0
+        assert "symlink" in result.output.lower()
+
+
 class TestListCommand:
     def test_list_outputs_each_conversation(self) -> None:
         # Use a wide terminal so rich doesn't wrap conv_ids mid-name.

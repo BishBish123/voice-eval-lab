@@ -57,6 +57,22 @@ def _validate_unit_interval(value: float) -> float:
     return value
 
 
+def _assert_no_symlink_ancestor(path: Path) -> None:
+    """Raise `typer.BadParameter` if any *parent* of `path` is a symlink.
+
+    Checking only the final path component misses the case where an
+    attacker pre-plants a symlink earlier in the chain
+    (e.g. ``/tmp/evil -> /etc``) so that writing to
+    ``/tmp/evil/output.md`` redirects into ``/etc/output.md``.
+    Walking all parents catches that class of attack.
+    """
+    for parent in path.parents:
+        if parent.is_symlink():
+            raise typer.BadParameter(
+                f"refusing to write: parent directory is a symlink: {parent}"
+            )
+
+
 def _safe_write_text(path: Path, body: str) -> None:
     """Write `body` to `path`, refusing symlinks and surfacing OSError cleanly.
 
@@ -66,6 +82,7 @@ def _safe_write_text(path: Path, body: str) -> None:
     readable message so common failures (read-only mount, permissions,
     no space left) don't surface as raw Python tracebacks.
     """
+    _assert_no_symlink_ancestor(path)
     if path.is_symlink():
         raise typer.BadParameter(f"refusing to write to symlink: {path}")
     try:
@@ -176,6 +193,7 @@ def baseline(
     false_trigger_rate: float = typer.Option(0.0, callback=_validate_unit_interval),
 ) -> None:
     """Run the eval and persist the headline scores as a baseline."""
+    _assert_no_symlink_ancestor(save)
     if save.is_symlink():
         raise typer.BadParameter(f"refusing to write to symlink: {save}")
     try:

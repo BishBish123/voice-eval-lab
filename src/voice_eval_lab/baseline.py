@@ -39,6 +39,19 @@ from voice_eval_lab.models import EvalReport
 CURRENT_SCHEMA_VERSION = 1
 
 
+def _assert_no_symlink_ancestor(path: Path) -> None:
+    """Raise `OSError` if any *parent directory* of `path` is a symlink.
+
+    Checking only the final component misses the case where an attacker
+    pre-plants a symlink higher in the directory tree so that writing to
+    ``/tmp/evil/baseline.json`` redirects the file into an arbitrary
+    location.  Walking every parent catches that entire attack class.
+    """
+    for parent in path.parents:
+        if parent.is_symlink():
+            raise OSError(f"refusing to write: parent directory is a symlink: {parent}")
+
+
 class BaselineSchemaError(ValueError):
     """Raised when a baseline file is missing/wrong schema version or fields."""
 
@@ -94,6 +107,7 @@ def write_baseline(report: EvalReport, path: Path) -> None:
     outside it. (The CLI does its own symlink check on the final path
     too; this layer enforces the invariant for any direct caller.)
     """
+    _assert_no_symlink_ancestor(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_symlink():
         raise OSError(f"refusing to write to symlinked baseline path: {path}")

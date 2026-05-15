@@ -122,6 +122,18 @@ class TestRoundTrip:
         loaded = read_baseline(path)
         assert loaded.aggregate_wer in {0.01, 0.99}
 
+    def test_symlinked_parent_directory_rejected(self, tmp_path: Path) -> None:
+        # Pre-plant a symlink at the parent level so that a write to
+        # link_dir/baseline.json would redirect into real_dir/baseline.json
+        # — which could be outside the intended write scope on a shared box.
+        real_dir = tmp_path / "real"
+        real_dir.mkdir()
+        link_dir = tmp_path / "link"
+        link_dir.symlink_to(real_dir)
+        with pytest.raises(OSError, match="symlink"):
+            write_baseline(_report(), link_dir / "baseline.json")
+        assert not (real_dir / "baseline.json").exists()
+
     def test_temp_path_symlink_rejected(self, tmp_path: Path) -> None:
         # A pre-planted symlink at the final destination must be rejected
         # so the rename cannot redirect to an arbitrary location.
