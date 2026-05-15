@@ -151,6 +151,31 @@ class TestRoundTrip:
 # ---------------------------------------------------------------------------
 
 
+class TestReadBaselineReadErrors:
+    """read_baseline must map file-read errors to clean OSError messages."""
+
+    def test_unicode_decode_error_raises_oserror(self, tmp_path: Path) -> None:
+        bad = tmp_path / "baseline.json"
+        bad.write_bytes(b"\xff\xfe binary garbage \x80\x81")
+        with pytest.raises(OSError, match=r"utf-8|unicode|UTF-8"):
+            read_baseline(bad)
+
+    def test_is_a_directory_raises_oserror(self, tmp_path: Path) -> None:
+        # Passing a directory path should raise OSError with a clear message.
+        with pytest.raises(OSError, match="directory"):
+            read_baseline(tmp_path)
+
+    def test_permission_error_propagates(self, tmp_path: Path) -> None:
+        bad = tmp_path / "baseline.json"
+        bad.write_text('{"schema_version": 1, "report": {}}')
+        bad.chmod(0o000)
+        try:
+            with pytest.raises((OSError, PermissionError)):
+                read_baseline(bad)
+        finally:
+            bad.chmod(0o644)
+
+
 class TestReadBaselineStrict:
     def test_read_baseline_rejects_v0_blob(self, tmp_path: Path) -> None:
         # Pre-versioning shape: bare EvalReport dump, no wrapper.

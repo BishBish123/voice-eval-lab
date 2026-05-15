@@ -258,6 +258,55 @@ class TestRenderCommand:
         assert result.exit_code == 2, result.output
 
 
+class TestRenderReadErrors:
+    """render command must map read-time errors to exit 2 with a clean message."""
+
+    def _scores_path(self, tmp_path: Path) -> Path:
+        scores = tmp_path / "scores.json"
+        runner.invoke(app, ["run", "--out", str(tmp_path / "REPORT.md"), "--json", str(scores)])
+        return scores
+
+    def test_render_unicode_decode_error_exits_2(self, tmp_path: Path) -> None:
+        bad = tmp_path / "scores.json"
+        bad.write_bytes(b"\xff\xfe not utf-8 \x80\x81")
+        result = runner.invoke(app, ["render", "--from", str(bad), "--out", str(tmp_path / "x.md")])
+        assert result.exit_code == 2
+        assert "utf-8" in result.output.lower() or "unicode" in result.output.lower()
+
+    def test_render_is_a_directory_exits_2(self, tmp_path: Path) -> None:
+        # Passing a directory as the scores file should exit 2 cleanly.
+        result = runner.invoke(
+            app, ["render", "--from", str(tmp_path), "--out", str(tmp_path / "x.md")]
+        )
+        assert result.exit_code == 2
+
+    def test_render_oserror_exits_2(self, tmp_path: Path) -> None:
+        # Simulate an unreadable file by making it a directory whose parent
+        # is a regular file (triggers NotADirectoryError, an OSError subclass).
+        blocker = tmp_path / "blocker"
+        blocker.write_text("file")
+        bad = blocker / "scores.json"
+        result = runner.invoke(
+            app, ["render", "--from", str(bad), "--out", str(tmp_path / "x.md")]
+        )
+        assert result.exit_code == 2
+
+
+class TestCompareReadErrors:
+    """compare command must map read-time errors in the baseline to exit 2."""
+
+    def test_compare_unicode_decode_error_exits_2(self, tmp_path: Path) -> None:
+        bad = tmp_path / "baseline.json"
+        bad.write_bytes(b"\xff\xfe not utf-8 \x80\x81")
+        result = runner.invoke(app, ["compare", "--baseline", str(bad)])
+        assert result.exit_code == 2
+        assert "utf-8" in result.output.lower() or "unicode" in result.output.lower()
+
+    def test_compare_is_a_directory_exits_2(self, tmp_path: Path) -> None:
+        result = runner.invoke(app, ["compare", "--baseline", str(tmp_path)])
+        assert result.exit_code == 2
+
+
 class TestCompareErrors:
     def test_compare_missing_baseline_exits_2(self, tmp_path: Path) -> None:
         result = runner.invoke(

@@ -144,7 +144,14 @@ def read_baseline(path: Path) -> EvalReport:
     Pydantic-default values for metrics that didn't exist when it was
     written.
     """
-    raw: Any = json.loads(path.read_text())
+    try:
+        raw: Any = json.loads(path.read_text())
+    except UnicodeDecodeError as exc:
+        raise OSError(
+            f"baseline at {path} is not valid UTF-8 (binary or corrupt file)"
+        ) from exc
+    except IsADirectoryError:
+        raise OSError(f"baseline path {path} is a directory, not a file") from None
     if not isinstance(raw, dict):
         raise BaselineSchemaError(
             f"baseline at {path} is not a JSON object (got {type(raw).__name__})"

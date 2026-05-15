@@ -240,6 +240,15 @@ def compare(
     except FileNotFoundError:
         console.print(f"[red]baseline not found:[/] {baseline_path}", style="bold")
         raise typer.Exit(code=2) from None
+    except IsADirectoryError:
+        console.print(f"[red]baseline path is a directory, not a file:[/] {baseline_path}")
+        raise typer.Exit(code=2) from None
+    except UnicodeDecodeError as exc:
+        console.print(f"[red]baseline is not valid UTF-8:[/] {baseline_path} ({exc})")
+        raise typer.Exit(code=2) from None
+    except OSError as exc:
+        console.print(f"[red]could not read baseline {baseline_path}:[/] {exc}")
+        raise typer.Exit(code=2) from None
     except json.JSONDecodeError as exc:
         console.print(f"[red]baseline is not valid JSON:[/] {baseline_path} ({exc})")
         raise typer.Exit(code=2) from None
@@ -284,10 +293,21 @@ def render(
 ) -> None:
     """Re-render an existing scores.json into markdown or HTML."""
     try:
-        report = EvalReport.model_validate(json.loads(json_path.read_text()))
+        raw_text = json_path.read_text()
     except FileNotFoundError:
         console.print(f"[red]scores file not found:[/] {json_path}")
         raise typer.Exit(code=2) from None
+    except IsADirectoryError:
+        console.print(f"[red]scores path is a directory, not a file:[/] {json_path}")
+        raise typer.Exit(code=2) from None
+    except UnicodeDecodeError as exc:
+        console.print(f"[red]scores file is not valid UTF-8:[/] {json_path} ({exc})")
+        raise typer.Exit(code=2) from None
+    except OSError as exc:
+        console.print(f"[red]could not read scores file {json_path}:[/] {exc}")
+        raise typer.Exit(code=2) from None
+    try:
+        report = EvalReport.model_validate(json.loads(raw_text))
     except json.JSONDecodeError as exc:
         console.print(f"[red]scores file is not valid JSON:[/] {json_path} ({exc})")
         raise typer.Exit(code=2) from None
