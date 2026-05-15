@@ -385,6 +385,19 @@ class VoicePipeline:
                     )
                 )
             history.append(user_turn)
+            # Append the agent's reply so subsequent LLM calls see the
+            # full dialogue rather than only the user side.  Omitting the
+            # agent turns was the original bug: multi-turn conversations
+            # fed the LLM only a user-only history, making history_len
+            # grow but the actual context one-sided.
+            history.append(
+                Turn(
+                    role=TurnRole.AGENT,
+                    text=llm_text,
+                    started_at_ms=user_turn.ended_at_ms,
+                    ended_at_ms=user_turn.ended_at_ms + self.barge_in_yield_ms,
+                )
+            )
 
         run = ConversationRun(
             conv_id=conversation.conv_id,

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from voice_eval_lab.eval.golden import default_golden_set
-from voice_eval_lab.models import Conversation, Turn, TurnRole
+from voice_eval_lab.models import Conversation, PipelineSpan, Turn, TurnRole
 from voice_eval_lab.pipeline import MockLLM, MockSTT, MockTTS, VoicePipeline
 
 
@@ -107,6 +107,41 @@ class TestPipelineRun:
         # And materially different from the rate=1.0 ceiling (which would
         # be 200) and rate=0 floor (0).
         assert 0 < injected_a < n
+
+    async def test_history_includes_prior_agent_replies(self) -> None:
+        # The LLM's history argument must include both user and agent turns
+        # from previous exchanges.  Before the fix, only user turns were
+        # appended, so the history_len span attr grew but the actual context
+        # passed to llm.reply was user-only.
+        captured: list[list[Turn]] = []
+
+        class CapturingLLM:
+            async def reply(
+                self,
+                history: list[Turn],
+                last_user_text: str,
+                gold_facts: list[str],
+            ) -> tuple[str, list[PipelineSpan]]:
+                captured.append(list(history))
+                return "agent reply", []
+
+        pipeline = VoicePipeline(stt=MockSTT(), llm=CapturingLLM(), tts=MockTTS())
+        # Use postgres-replication which has 2 user turns so we get a
+        # non-trivial history on the second call.
+        conv = default_golden_set()[0]
+        await pipeline.run(conv)
+
+        # Second call should have seen [user_turn_0, agent_reply_0] in history.
+        assert len(captured) == 2
+        first_history = captured[0]
+        second_history = captured[1]
+        # First call: history is empty (no prior turns yet).
+        assert first_history == []
+        # Second call: must include both the first user turn and the agent reply.
+        assert len(second_history) == 2
+        assert second_history[0].role.value == "user"
+        assert second_history[1].role.value == "agent"
+        assert second_history[1].text == "agent reply"
 
     async def test_llm_surfaces_matching_gold_fact(self) -> None:
         pipeline = VoicePipeline(stt=MockSTT(), llm=MockLLM(), tts=MockTTS())
