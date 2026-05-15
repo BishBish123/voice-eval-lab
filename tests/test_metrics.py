@@ -7,6 +7,7 @@ import pytest
 from voice_eval_lab.eval.metrics import (
     barge_in_success_rate,
     false_trigger_rate,
+    llm_decisiveness,
     response_faithfulness,
     score_run,
     transcription_wer,
@@ -133,6 +134,108 @@ class TestFaithfulness:
         )
         # Only the first reply counts; should be 1.0.
         assert response_faithfulness(conv, run) == 1.0
+
+    def test_faithfulness_skips_blank_user_turns(self) -> None:
+        # A blank user turn (silence / noise frame) should not inflate
+        # the denominator — the agent's reply to blank input is not an
+        # opportunity to demonstrate faithfulness.
+        blank_turn = Turn(
+            role=TurnRole.USER, text="", started_at_ms=0, ended_at_ms=200
+        )
+        real_turn = Turn(
+            role=TurnRole.USER, text="how does raft work", started_at_ms=300, ended_at_ms=2000
+        )
+        conv = Conversation(
+            conv_id="c", topic="t", turns=[blank_turn, real_turn],
+            gold_facts=["Raft elects a leader"]
+        )
+        # Two turn_runs: first corresponds to blank user turn, second to the real one.
+        run = ConversationRun(
+            conv_id="c", topic="t", user_turns_played=2,
+            turn_runs=[
+                TurnRun(
+                    user_turn_index=0, transcribed_text="", agent_reply="hmm",
+                    spans=[], false_trigger=False
+                ),
+                TurnRun(
+                    user_turn_index=1, transcribed_text="how does raft work",
+                    agent_reply="Raft elects a leader by majority vote",
+                    spans=[], false_trigger=False
+                ),
+            ],
+        )
+        # Only the second (non-blank) turn counts; it is grounded → 1.0
+        assert response_faithfulness(conv, run) == 1.0
+
+    def test_aggregate_pooled_metrics_skip_noise_turns(self) -> None:
+        # Pooled aggregate faithfulness must also exclude blank user turns
+        # from its denominator, not just per-conversation.
+        blank_turn = Turn(role=TurnRole.USER, text="", started_at_ms=0, ended_at_ms=200)
+        real_turn = Turn(
+            role=TurnRole.USER, text="explain raft", started_at_ms=300, ended_at_ms=2000
+        )
+        conv = Conversation(
+            conv_id="agg", topic="t", turns=[blank_turn, real_turn],
+            gold_facts=["Raft uses leader election"]
+        )
+        run = ConversationRun(
+            conv_id="agg", topic="t", user_turns_played=2,
+            turn_runs=[
+                TurnRun(
+                    user_turn_index=0, transcribed_text="", agent_reply="hmm",
+                    spans=[
+                        PipelineSpan(name="vad_end", started_at_ms=0, ended_at_ms=0),
+                        PipelineSpan(name="tts_first_byte", started_at_ms=0, ended_at_ms=50),
+                    ],
+                    false_trigger=False,
+                ),
+                TurnRun(
+                    user_turn_index=1, transcribed_text="explain raft",
+                    agent_reply="Raft uses leader election",
+                    spans=[
+                        PipelineSpan(name="vad_end", started_at_ms=300, ended_at_ms=300),
+                        PipelineSpan(name="tts_first_byte", started_at_ms=300, ended_at_ms=350),
+                    ],
+                    false_trigger=False,
+                ),
+            ],
+        )
+        report = score_run([(conv, run)])
+        # Blank turn excluded: 1 grounded / 1 counted = 1.0, not 1/2 = 0.5
+        assert report.aggregate_faithfulness == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# Decisiveness — blank turn filtering
+# ---------------------------------------------------------------------------
+
+
+class TestDecisivenessBlankTurns:
+    def test_decisiveness_skips_blank_user_turns(self) -> None:
+        # Agent reply to a blank user turn must not count in the denominator.
+        blank = Turn(role=TurnRole.USER, text="   ", started_at_ms=0, ended_at_ms=200)
+        real = Turn(
+            role=TurnRole.USER, text="what is raft", started_at_ms=300, ended_at_ms=1500
+        )
+        conv = Conversation(conv_id="c", topic="t", turns=[blank, real], gold_facts=[])
+        run = ConversationRun(
+            conv_id="c", topic="t", user_turns_played=2,
+            turn_runs=[
+                TurnRun(
+                    user_turn_index=0, transcribed_text="",
+                    agent_reply="I don't have a confident answer",
+                    spans=[], false_trigger=False,
+                ),
+                TurnRun(
+                    user_turn_index=1, transcribed_text="what is raft",
+                    agent_reply="Raft is a consensus algorithm.",
+                    spans=[], false_trigger=False,
+                ),
+            ],
+        )
+        # Only the second (non-blank) turn counts; it is decisive → 1.0
+        result = llm_decisiveness(run, conv)
+        assert result == pytest.approx(1.0)
 
 
 # ---------------------------------------------------------------------------

@@ -150,14 +150,25 @@ def _faithfulness_counts(
     vacuously faithful at the per-conversation layer but contribute
     nothing to the pooled aggregate (no facts to be (un)grounded
     against).
+
+    Blank/whitespace-only user turns (silence frames, noise-only VAD
+    triggers) are excluded from the denominator, mirroring the WER
+    skip.  Counting a "reply" to a blank user turn as an opportunity
+    to be faithful inflates the denominator with turns that carry no
+    factual content to ground against.
     """
     if not conversation.gold_facts:
         return 0, 0
     normalized_facts = [_normalize_text(f) for f in conversation.gold_facts]
+    user_turns = [t for t in conversation.turns if t.role is TurnRole.USER]
     grounded = 0
     counted = 0
-    for tr in run.turn_runs:
+    for i, tr in enumerate(run.turn_runs):
         if tr.false_trigger:
+            continue
+        # Skip turns whose source user utterance was blank/whitespace
+        # (silence frame, cough-only VAD trigger, etc.).
+        if i < len(user_turns) and not user_turns[i].text.strip():
             continue
         counted += 1
         reply = _normalize_text(tr.agent_reply)
@@ -375,12 +386,30 @@ def endpointing_accuracy(
     return aligned / counted
 
 
-def _decisiveness_counts(run: ConversationRun) -> tuple[int, int]:
-    """Return (decisive_replies, total_replies_excluding_false_triggers)."""
+def _decisiveness_counts(
+    run: ConversationRun,
+    conversation: Conversation | None = None,
+) -> tuple[int, int]:
+    """Return (decisive_replies, total_replies_excluding_false_triggers).
+
+    When `conversation` is supplied, blank/whitespace-only user turns
+    (silence frames, noise-only VAD triggers) are excluded from the
+    denominator, mirroring the WER and faithfulness skips.  Replies to
+    blank user turns carry no conversational content against which
+    decisiveness is meaningful.
+    """
+    user_turns = (
+        [t for t in conversation.turns if t.role is TurnRole.USER]
+        if conversation is not None
+        else None
+    )
     counted = 0
     decisive = 0
-    for tr in run.turn_runs:
+    for i, tr in enumerate(run.turn_runs):
         if tr.false_trigger:
+            continue
+        # Skip turns whose source user utterance was blank/whitespace.
+        if user_turns is not None and i < len(user_turns) and not user_turns[i].text.strip():
             continue
         counted += 1
         reply = _normalize_text(tr.agent_reply)
@@ -394,11 +423,16 @@ def _decisiveness_counts(run: ConversationRun) -> tuple[int, int]:
     return decisive, counted
 
 
-def llm_decisiveness(run: ConversationRun) -> float:
+def llm_decisiveness(
+    run: ConversationRun,
+    conversation: Conversation | None = None,
+) -> float:
     """Fraction of agent replies that don't contain a hedging phrase.
 
     False-trigger turns are excluded — the agent is *supposed* to dodge
     those. Empty replies count as hedging (no signal = no commitment).
+    When `conversation` is supplied, blank/whitespace-only user turns
+    are also excluded from the denominator.
 
     Hedging is detected in two passes:
     - long phrases via NFKC-normalized substring (``HEDGING_PHRASES``)
@@ -406,7 +440,7 @@ def llm_decisiveness(run: ConversationRun) -> float:
       word-boundary regex so substrings inside unrelated tokens don't
       count.
     """
-    decisive, counted = _decisiveness_counts(run)
+    decisive, counted = _decisiveness_counts(run, conversation)
     if counted == 0:
         return 1.0
     return decisive / counted
@@ -469,7 +503,7 @@ def score_conversation(
         barge_in_latency_p95_ms=barge_in_latency_p95_ms(run),
         tts_first_byte_jitter_ms=tts_first_byte_jitter_ms(run),
         endpointing_accuracy=endpointing_accuracy(conversation, run),
-        llm_decisiveness=llm_decisiveness(run),
+        llm_decisiveness=llm_decisiveness(run, conversation),
     )
 
 
@@ -549,7 +583,7 @@ def _pool_run_samples(
         ft_turns, ft_total = _false_trigger_counts(c, r)
         pool.false_trigger_turns += ft_turns
         pool.false_trigger_total += ft_total
-        decisive, dec_total = _decisiveness_counts(r)
+        decisive, dec_total = _decisiveness_counts(r, c)
         pool.decisive_replies += decisive
         pool.decisive_total += dec_total
         aligned, measured = _endpointing_counts(c, r)
