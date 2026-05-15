@@ -143,6 +143,46 @@ class TestPipelineRun:
         assert second_history[1].role.value == "agent"
         assert second_history[1].text == "agent reply"
 
+    async def test_false_trigger_independent_per_turn_per_conversation(self) -> None:
+        # Two conversations with the same seed and same turns must produce
+        # the same injection pattern independently of each other (i.e.
+        # adding conversation B must not change the draws for conversation A).
+        turns = [
+            Turn(
+                role=TurnRole.USER,
+                text=f"hi {i}",
+                started_at_ms=i * 1000,
+                ended_at_ms=i * 1000 + 500,
+            )
+            for i in range(10)
+        ]
+        conv_a = Conversation(conv_id="conv-a", topic="t", turns=turns, gold_facts=[])
+        conv_b = Conversation(conv_id="conv-b", topic="t", turns=turns, gold_facts=[])
+
+        pipeline = VoicePipeline(
+            stt=MockSTT(),
+            llm=MockLLM(),
+            tts=MockTTS(),
+            false_trigger_rate=0.5,
+            false_trigger_seed=7,
+        )
+        run_a_alone = await pipeline.run(conv_a)
+
+        # Running conv_b before conv_a must not change conv_a's draws.
+        run_b = await pipeline.run(conv_b)
+        run_a_after = await pipeline.run(conv_a)
+
+        triggers_a_alone = [tr.false_trigger for tr in run_a_alone.turn_runs]
+        triggers_a_after = [tr.false_trigger for tr in run_a_after.turn_runs]
+        triggers_b = [tr.false_trigger for tr in run_b.turn_runs]
+
+        # conv_a draws must be identical regardless of whether conv_b ran first.
+        assert triggers_a_alone == triggers_a_after
+        # conv_b should have its own independent draw pattern.
+        # (They won't always differ, but with 10 turns and rate=0.5 and
+        # different conv_ids the derived seeds will produce a different sequence.)
+        assert triggers_a_alone != triggers_b
+
     async def test_llm_surfaces_matching_gold_fact(self) -> None:
         pipeline = VoicePipeline(stt=MockSTT(), llm=MockLLM(), tts=MockTTS())
         # postgres-replication has facts mentioning "WAL" / "replication"

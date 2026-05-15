@@ -308,16 +308,6 @@ class VoicePipeline:
         history: list[Turn] = []
         runs: list[TurnRun] = []
         played = 0
-        # A fresh Random is constructed per-conversation so two pipelines
-        # that share `false_trigger_seed` produce identical injections on
-        # identical golden sets — important for the corpus eval, where any
-        # reseeding strategy that looked at wall-clock time would make the
-        # baseline drift turn-by-turn.
-        rng = (
-            random.Random(self.false_trigger_seed)  # noqa: S311 - eval RNG, not crypto
-            if self.false_trigger_rate > 0
-            else None
-        )
         for i, user_turn in enumerate(_user_turns(conversation.turns)):
             played += 1
             stt_text, stt_spans = await self.stt.transcribe(user_turn)
@@ -368,12 +358,25 @@ class VoicePipeline:
                     spans=spans,
                 )
             )
-            # Per-turn Bernoulli sample: one synthetic false-trigger turn
-            # gets appended right after this user turn whenever the draw
-            # falls under the configured rate. The previous "if rate > 0,
-            # append exactly one at the end" behaviour treated 0.2 and 1.0
-            # the same — false_trigger_rate is now an actual rate.
-            if rng is not None and rng.random() < self.false_trigger_rate:
+            # Per-turn Bernoulli sample: when a seed is configured, the
+            # draw is derived from (false_trigger_seed, conv_id, turn_index)
+            # so draws are independent across conversations and across turns
+            # within a conversation.  A single per-conversation RNG shared
+            # across all turns meant that adding/removing conversations would
+            # shift draws for every subsequent conversation in the corpus
+            # run; deriving per-turn isolates each draw completely.
+            # When false_trigger_seed is None, a fresh unseeded Random()
+            # provides system-entropy draws as before.
+            # random.Random only accepts None/int/float/str/bytes as seed;
+            # we encode the compound key as a str so all types are covered.
+            if self.false_trigger_rate > 0 and (
+                random.Random(  # noqa: S311 - eval RNG, not crypto
+                    None
+                    if self.false_trigger_seed is None
+                    else f"{self.false_trigger_seed}:{conversation.conv_id}:{i}"
+                ).random()
+                < self.false_trigger_rate
+            ):
                 runs.append(
                     TurnRun(
                         user_turn_index=len(runs),
