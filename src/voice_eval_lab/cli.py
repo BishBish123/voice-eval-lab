@@ -12,6 +12,7 @@ Subcommands:
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import sys
 from pathlib import Path
@@ -55,6 +56,52 @@ def _validate_unit_interval(value: float) -> float:
     if not 0.0 <= value <= 1.0:
         raise typer.BadParameter(f"must be in [0.0, 1.0], got {value!r}")
     return value
+
+
+def _load_thresholds_config(path: Path) -> dict[str, float]:
+    """Load a JSON thresholds-config file and return a validated {key: float} dict.
+
+    Exits with code 2 on any read or parse error.  Unknown keys and
+    non-numeric values are also rejected so a typo in the config file
+    does not silently fall back to the library default.
+    """
+    try:
+        raw_cfg = path.read_text()
+    except FileNotFoundError:
+        console.print(f"[red]thresholds config not found:[/] {path}")
+        raise typer.Exit(code=2) from None
+    except IsADirectoryError:
+        console.print(f"[red]thresholds config path is a directory:[/] {path}")
+        raise typer.Exit(code=2) from None
+    except UnicodeDecodeError as exc:
+        console.print(f"[red]thresholds config is not valid UTF-8:[/] {path} ({exc})")
+        raise typer.Exit(code=2) from None
+    except OSError as exc:
+        console.print(f"[red]could not read thresholds config {path}:[/] {exc}")
+        raise typer.Exit(code=2) from None
+    try:
+        cfg_data = json.loads(raw_cfg)
+    except json.JSONDecodeError as exc:
+        console.print(f"[red]thresholds config is not valid JSON:[/] {path} ({exc})")
+        raise typer.Exit(code=2) from None
+    if not isinstance(cfg_data, dict):
+        console.print(f"[red]thresholds config must be a JSON object:[/] {path}")
+        raise typer.Exit(code=2) from None
+    valid_keys = {f.name for f in dataclasses.fields(RegressionThresholds)}
+    result: dict[str, float] = {}
+    for key, val in cfg_data.items():
+        if key not in valid_keys:
+            console.print(
+                f"[red]unknown threshold key {key!r}[/] (valid: {sorted(valid_keys)})"
+            )
+            raise typer.Exit(code=2) from None
+        if not isinstance(val, (int, float)):
+            console.print(
+                f"[red]threshold value for {key!r} must be a number, got {val!r}[/]"
+            )
+            raise typer.Exit(code=2) from None
+        result[key] = float(val)
+    return result
 
 
 def _assert_no_symlink_ancestor(path: Path) -> None:
@@ -233,6 +280,17 @@ def compare(
     faithfulness_threshold: float = typer.Option(
         0.05, help="Allowed faithfulness drop (fraction)."
     ),
+    thresholds_config: Path | None = typer.Option(
+        None,
+        "--thresholds-config",
+        help=(
+            "JSON file mapping metric names to tolerance values. "
+            "Overrides the per-metric CLI flags and library defaults for "
+            "any key present. Valid keys: latency_p95_ms, wer, faithfulness, "
+            "barge_in, false_trigger, barge_in_latency_p95_ms, "
+            "tts_first_byte_jitter_ms, endpointing, decisiveness."
+        ),
+    ),
 ) -> None:
     """Diff a fresh run against a baseline; exit non-zero if any metric regressed."""
     try:
@@ -266,10 +324,29 @@ def compare(
     except IncompleteRunError as exc:
         console.print(f"[red]incomplete run:[/] {exc}")
         raise typer.Exit(code=2) from None
+    # Start from the per-metric CLI flags, then overlay any keys present in
+    # the --thresholds-config JSON file so the full 9-metric surface is
+    # reachable without enumerating each one on the command line.
+    threshold_overrides = (
+        _load_thresholds_config(thresholds_config)
+        if thresholds_config is not None
+        else {}
+    )
+    _defaults = RegressionThresholds()
     thresholds = RegressionThresholds(
-        latency_p95_ms=latency_threshold_ms,
-        wer=wer_threshold,
-        faithfulness=faithfulness_threshold,
+        latency_p95_ms=threshold_overrides.get("latency_p95_ms", latency_threshold_ms),
+        wer=threshold_overrides.get("wer", wer_threshold),
+        faithfulness=threshold_overrides.get("faithfulness", faithfulness_threshold),
+        barge_in=threshold_overrides.get("barge_in", _defaults.barge_in),
+        false_trigger=threshold_overrides.get("false_trigger", _defaults.false_trigger),
+        barge_in_latency_p95_ms=threshold_overrides.get(
+            "barge_in_latency_p95_ms", _defaults.barge_in_latency_p95_ms
+        ),
+        tts_first_byte_jitter_ms=threshold_overrides.get(
+            "tts_first_byte_jitter_ms", _defaults.tts_first_byte_jitter_ms
+        ),
+        endpointing=threshold_overrides.get("endpointing", _defaults.endpointing),
+        decisiveness=threshold_overrides.get("decisiveness", _defaults.decisiveness),
     )
     diffs = compare_reports(base, current, thresholds)
     rendered = render_diffs(diffs)

@@ -307,6 +307,83 @@ class TestCompareReadErrors:
         assert result.exit_code == 2
 
 
+class TestCompareThresholdsConfig:
+    """--thresholds-config loads all 9 metric overrides from a JSON file."""
+
+    def _baseline(self, tmp_path: Path) -> Path:
+        bl = tmp_path / "baseline.json"
+        runner.invoke(app, ["baseline", "--save", str(bl)])
+        return bl
+
+    def test_thresholds_config_overrides_wer_threshold(self, tmp_path: Path) -> None:
+        bl = self._baseline(tmp_path)
+        # A very tight WER threshold (0.0) means even a small injection regresses.
+        cfg = tmp_path / "thresholds.json"
+        cfg.write_text('{"wer": 0.0}')
+        result = runner.invoke(
+            app,
+            [
+                "compare",
+                "--baseline", str(bl),
+                "--wer-substitution-rate", "0.5",
+                "--thresholds-config", str(cfg),
+            ],
+        )
+        assert result.exit_code == 1
+        assert "regression" in result.output.lower()
+
+    def test_thresholds_config_all_permissive_no_regression(self, tmp_path: Path) -> None:
+        bl = self._baseline(tmp_path)
+        # Permissive thresholds — even large WER injection should not regress.
+        cfg = tmp_path / "thresholds.json"
+        cfg.write_text('{"wer": 1.0, "faithfulness": 1.0, "decisiveness": 1.0}')
+        result = runner.invoke(
+            app,
+            [
+                "compare",
+                "--baseline", str(bl),
+                "--wer-substitution-rate", "0.5",
+                "--thresholds-config", str(cfg),
+            ],
+        )
+        assert result.exit_code == 0
+        assert "no regressions" in result.output
+
+    def test_thresholds_config_unknown_key_exits_2(self, tmp_path: Path) -> None:
+        bl = self._baseline(tmp_path)
+        cfg = tmp_path / "thresholds.json"
+        cfg.write_text('{"unknown_metric": 0.5}')
+        result = runner.invoke(app, ["compare", "--baseline", str(bl), "--thresholds-config", str(cfg)])
+        assert result.exit_code == 2
+        assert "unknown" in result.output.lower()
+
+    def test_thresholds_config_non_number_value_exits_2(self, tmp_path: Path) -> None:
+        bl = self._baseline(tmp_path)
+        cfg = tmp_path / "thresholds.json"
+        cfg.write_text('{"wer": "loose"}')
+        result = runner.invoke(app, ["compare", "--baseline", str(bl), "--thresholds-config", str(cfg)])
+        assert result.exit_code == 2
+
+    def test_thresholds_config_missing_file_exits_2(self, tmp_path: Path) -> None:
+        bl = self._baseline(tmp_path)
+        result = runner.invoke(
+            app,
+            [
+                "compare",
+                "--baseline", str(bl),
+                "--thresholds-config", str(tmp_path / "no-such.json"),
+            ],
+        )
+        assert result.exit_code == 2
+
+    def test_thresholds_config_invalid_json_exits_2(self, tmp_path: Path) -> None:
+        bl = self._baseline(tmp_path)
+        cfg = tmp_path / "bad.json"
+        cfg.write_text("not json {")
+        result = runner.invoke(app, ["compare", "--baseline", str(bl), "--thresholds-config", str(cfg)])
+        assert result.exit_code == 2
+
+
 class TestCompareErrors:
     def test_compare_missing_baseline_exits_2(self, tmp_path: Path) -> None:
         result = runner.invoke(
