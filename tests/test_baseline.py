@@ -192,6 +192,24 @@ class TestReadBaselineStrict:
         with pytest.raises(BaselineSchemaError, match="999"):
             read_baseline(path)
 
+    def test_read_baseline_too_old_message_suggests_rerun(self, tmp_path: Path) -> None:
+        # A version lower than CURRENT_SCHEMA_VERSION should say "rerun baseline".
+        path = tmp_path / "baseline.json"
+        path.write_text(
+            json.dumps({"schema_version": CURRENT_SCHEMA_VERSION - 1, "report": {}})
+        )
+        with pytest.raises(BaselineSchemaError, match=r"rerun|re-run|refresh"):
+            read_baseline(path)
+
+    def test_read_baseline_too_new_message_suggests_upgrade(self, tmp_path: Path) -> None:
+        # A version higher than CURRENT_SCHEMA_VERSION should say "upgrade voice-eval-lab".
+        path = tmp_path / "baseline.json"
+        path.write_text(
+            json.dumps({"schema_version": CURRENT_SCHEMA_VERSION + 1, "report": {}})
+        )
+        with pytest.raises(BaselineSchemaError, match=r"upgrade"):
+            read_baseline(path)
+
     def test_read_baseline_rejects_missing_field(self, tmp_path: Path) -> None:
         # Drop a v0.2 metric the current schema requires.
         report_blob = _report().model_dump()

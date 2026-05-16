@@ -163,9 +163,16 @@ def read_baseline(path: Path) -> EvalReport:
         )
     version = raw["schema_version"]
     if version != CURRENT_SCHEMA_VERSION:
+        if isinstance(version, int) and version < CURRENT_SCHEMA_VERSION:
+            raise BaselineSchemaError(
+                f"baseline at {path} has schema_version={version!r} "
+                f"(older than current {CURRENT_SCHEMA_VERSION}) — "
+                "rerun `voice-eval baseline --save` to refresh"
+            )
         raise BaselineSchemaError(
-            f"baseline at {path} has schema_version={version!r}, "
-            f"expected {CURRENT_SCHEMA_VERSION} — re-run `voice-eval baseline --save`"
+            f"baseline at {path} has schema_version={version!r} "
+            f"(newer than current {CURRENT_SCHEMA_VERSION}) — "
+            "upgrade voice-eval-lab to read this baseline"
         )
     if "report" not in raw or not isinstance(raw["report"], dict):
         raise BaselineSchemaError(
