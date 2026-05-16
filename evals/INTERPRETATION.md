@@ -18,6 +18,11 @@ The gap between `vad_end` (the user stopped talking) and
 - The mock pipeline reports **275ms** because the stages are fixed
   — real numbers depend on the LLM model, network path, and TTS
   engine.
+- **Full-completion latency**: the mock pipeline waits for each stage
+  to complete before starting the next (STT → LLM → TTS in sequence).
+  This measures the full round-trip, not streaming / time-to-first-token.
+  Real streaming pipelines interleave LLM and TTS, so their p95 numbers
+  will be lower than the equivalent non-streaming latency.
 
 ### Transcription WER (corpus-pooled)
 

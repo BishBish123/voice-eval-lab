@@ -232,8 +232,8 @@ make check      # ruff + mypy --strict
 What's covered:
 
 - **Pipeline contract** — STT word substitution (global + per-turn),
-  span shape, false-trigger injection, gold-fact surfacing, streaming
-  LLM, RetryingTTS retry / backoff / max-attempts, LatencyBudget
+  span shape, false-trigger injection, gold-fact surfacing, full-completion
+  LLM latency, RetryingTTS retry / backoff / max-attempts, LatencyBudget
   flagging, double-barge-in, determinism.
 - **Metrics** — perfect / one-sub / empty-hyp / empty-ref WER,
   faithfulness with / without gold facts / case-insensitive /

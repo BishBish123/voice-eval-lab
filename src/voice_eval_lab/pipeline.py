@@ -2,13 +2,20 @@
 
 Real-pipeline shape:
 
-    audio frames → VAD → STT (streaming) → LLM (streaming) → TTS (streaming) → audio frames
+    audio frames → VAD → STT → LLM → TTS → audio frames
 
 This module ships *exactly* that lifecycle but with mock STT/LLM/TTS
 adapters that emit the structured `PipelineSpan` records the eval harness
 consumes. It exists so the harness can be exercised end-to-end without
 booking LiveKit + Deepgram + Cartesia accounts. Real adapters drop in
 behind the same Protocol surface.
+
+Latency semantics: the mock pipeline measures *full-completion* latency
+(the LLM and TTS calls return their full result before the next stage
+starts), not streaming / interleaved latency.  ``MockLLM.stream``
+exists as a Protocol exercise but is not wired into ``VoicePipeline.run``;
+the latency numbers reported by the eval reflect the full round-trip, not
+the time-to-first-token.
 """
 
 from __future__ import annotations
@@ -130,9 +137,10 @@ class MockLLM:
     ) -> AsyncIterator[str]:
         """Token-streaming variant — yields word chunks of the same reply.
 
-        Real LLMs interleave with TTS so the first audio byte fires before
-        the LLM finishes. Tests use this to assert the streaming contract
-        without coupling to wall-clock time.
+        This method implements the streaming *Protocol* surface so real
+        adapters can be swapped in, but ``VoicePipeline.run`` uses the
+        non-streaming ``reply`` path.  Latency numbers in the eval report
+        therefore reflect full-completion latency, not time-to-first-token.
         """
         text, _ = await self.reply(history, last_user_text, gold_facts)
         words = text.split()
