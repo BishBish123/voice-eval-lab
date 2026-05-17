@@ -99,10 +99,17 @@ class ConversationScore(BaseModel):
         description="Fraction of agent replies grounded in gold_facts."
     )
     barge_in_success_rate: float = Field(
-        description="Of user-interrupted turns, fraction the agent yielded within 200ms."
+        description=(
+            "Of user-interrupted turns, fraction the agent yielded within "
+            "barge_in_yield_ms (default 100ms). Higher is better."
+        )
     )
     false_trigger_rate: float = Field(
-        description="Fraction of agent replies started while the user was not speaking."
+        description=(
+            "Fraction of user-turn opportunities where the pipeline emitted a false-trigger "
+            "reply (denominator = user turn count, not len(turn_runs), so the rate is "
+            "independent of how many synthetic false-trigger entries were injected)."
+        )
     )
     barge_in_latency_p95_ms: float = Field(
         default=0.0,
@@ -151,9 +158,11 @@ class EvalReport(BaseModel):
     aggregate_false_trigger_rate: float | None = Field(
         default=None,
         description=(
-            "Pooled fraction of turns the pipeline marked as false_trigger: "
-            "sum(false_trigger_turns) / sum(turn_runs). None when no conversation in "
-            "the run produced any turn_runs at all."
+            "Corpus-pooled false-trigger rate: "
+            "sum(false_trigger_turns) / sum(user_turn_opportunities) across the run. "
+            "The denominator is user-turn count (not len(turn_runs)) so injected "
+            "synthetic false-trigger entries do not distort the rate. "
+            "None when no conversation in the run had any user turns."
         ),
     )
     aggregate_barge_in_latency_p95_ms: float | None = Field(
@@ -173,8 +182,11 @@ class EvalReport(BaseModel):
     aggregate_endpointing_accuracy: float | None = Field(
         default=1.0,
         description=(
-            "Mean of per-conversation endpointing scores, skipping conversations with no "
-            "VAD signal. None when no conversation produced any vad_end span."
+            "Corpus-pooled endpointing accuracy: "
+            "sum(aligned_turns) / sum(measured_turns_with_vad_end) across the run. "
+            "Pooled rather than mean-of-per-conversation so long conversations with "
+            "many measured turns weigh proportionally more. "
+            "None when no conversation produced any vad_end span."
         ),
     )
     aggregate_llm_decisiveness: float | None = Field(

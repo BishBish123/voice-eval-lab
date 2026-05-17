@@ -35,11 +35,13 @@ weighs proportionally more than a short one.
 - **>10%** breaks downstream LLM faithfulness — the model can't
   ground if the question came in wrong.
 
-### Response faithfulness (mean)
+### Response faithfulness (corpus-pooled)
 
 Fraction of agent replies that contain at least one gold-fact
-substring. Substring match is a proxy for an LLM judge — if you swap
-in `LLMJudge.score(reply, gold_facts)` it should keep the same
+substring, computed as `sum(grounded_replies) / sum(user_turn_opportunities)`
+across the corpus. Blank/whitespace-only user turns are excluded from
+the denominator. Substring match is a proxy for an LLM judge — if you
+swap in `LLMJudge.score(reply, gold_facts)` it should keep the same
 signature and the same metric semantics.
 
 - **>80%** target. Below 70% means the LLM is hallucinating answers
@@ -49,20 +51,26 @@ signature and the same metric semantics.
   in the golden set have no gold facts to match at all, which counts
   as zero-signal — see the per-conversation table for the breakdown).
 
-### Barge-in success (mean)
+### Barge-in success (corpus-pooled)
 
 Of the user-interrupted turns, fraction the pipeline yielded inside
-`barge_in_yield_ms` (default 100ms). Binary: did the agent stop
-talking when the user started?
+`barge_in_yield_ms` (default 100ms), computed as
+`sum(yielded) / sum(interrupted_turns)` across the corpus. Binary:
+did the agent stop talking when the user started?
 
 - **100%** is the only acceptable production value — a barge-in
   failure is a UX bug, not a tuning knob.
 - The mock pipeline reports 100% because it always yields.
 
-### False-trigger rate (mean)
+### False-trigger rate (corpus-pooled)
 
-Fraction of turns where the agent replied to a non-utterance
-(silence, cough, room noise). Driven by the VAD, not the LLM.
+Fraction of user-turn opportunities where the pipeline emitted a
+false-trigger reply, computed as
+`sum(false_trigger_turns) / sum(user_turn_count)` across the corpus.
+The denominator is the user-turn count (not `len(turn_runs)`) so
+injected synthetic false-trigger entries do not distort the rate.
+Blank/whitespace-only turns are included in opportunities since they
+are precisely the turns where false triggers are most likely.
 
 - **<2%** target. Past that the agent feels jittery — it interjects
   on coughs and breath sounds.
@@ -87,20 +95,24 @@ Population standard deviation of first-byte latency across turns.
 - **<30ms** feels steady to a listener.
 - **>100ms** the audio start feels uneven turn-to-turn.
 
-### Endpointing accuracy (mean)
+### Endpointing accuracy (corpus-pooled)
 
 Fraction of user turns where the VAD `vad_end` span aligned with the
-gold `ended_at_ms` (within `tolerance_ms`, default 50ms).
+gold `ended_at_ms` (within `tolerance_ms`, default 50ms), computed as
+`sum(aligned_turns) / sum(measured_turns_with_vad_end)` across the
+corpus so long conversations weigh proportionally more.
 
 - The mock pipeline always lines up exactly — the metric exists for
   real VAD systems where 100ms early or late is common.
 - **>95%** target on a real pipeline.
 
-### LLM decisiveness (mean)
+### LLM decisiveness (corpus-pooled)
 
 Fraction of agent replies that don't contain a hedging phrase ("I
-don't have a confident answer", "maybe", "I'm not sure", ...). Empty
-replies count as hedging.
+don't have a confident answer", "maybe", "I'm not sure", ...), computed
+as `sum(decisive_replies) / sum(user_turn_opportunities)` across the
+corpus. Blank/whitespace-only user turns and false-trigger turns are
+excluded from the denominator. Empty replies count as hedging.
 
 - **>80%** in production. Hedging on questions the agent should
   answer is a calibration bug, not graceful uncertainty.
