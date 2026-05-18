@@ -225,7 +225,7 @@ spans the pipeline emits.
 ## Tests
 
 ```bash
-make test       # 213 unit tests
+make test       # 239 unit tests
 make check      # ruff + mypy --strict
 ```
 
@@ -263,7 +263,7 @@ src/voice_eval_lab/
     golden.py      7-conversation bundled golden set
   cli.py           `voice-eval` Typer entrypoint
 
-tests/             213 unit tests
+tests/             239 unit tests
 evals/             REPORT.md + scores.json + INTERPRETATION.md
 docs/              ARCHITECTURE.md + ADRs
 ```
